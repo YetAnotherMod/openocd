@@ -22,6 +22,7 @@ noinst_LTLIBRARIES += %D%/libtarget.la
 	$(NDS32_SRC) \
 	$(STM8_SRC) \
 	$(INTEL_IA32_SRC) \
+	$(PPC476FS_SRC) \
 	$(ESIRISC_SRC) \
         $(ARC_SRC) \
 	%D%/avrt.c \
@@ -154,6 +155,9 @@ INTEL_IA32_SRC = \
 	%D%/quark_d20xx.c \
 	%D%/lakemont.c \
 	%D%/x86_32_common.c
+
+PPC476FS_SRC = \
+	ppc476fs.c
 
 ESIRISC_SRC = \
 	%D%/esirisc.c \
