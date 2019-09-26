@@ -170,6 +170,9 @@ ARC_SRC = \
         %D%/arc_jtag.c \
         %D%/arc_mem.c
 
+PPC476FS_SRC = \
+	%D%/ppc476fs.c
+
 %C%_libtarget_la_SOURCES += \
 	%D%/algorithm.h \
 	%D%/arm.h \
