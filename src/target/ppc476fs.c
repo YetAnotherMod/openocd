@@ -106,7 +106,7 @@ static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
 
 static struct ppc476fs_reg_info *find_reg_index(const char *reg_name)
 {
-    int i;
+    size_t i;
     for (i = 0; i < REG_INFO_COUNT; ++i) {
         if (strcmp(reg_info[i].name, reg_name) == 0)
             return &reg_info[i];
@@ -265,7 +265,6 @@ static int read_reg_by_code(struct target *target, uint32_t code, void *data)
 
 static int write_reg_by_code(struct target *target, uint32_t code, const uint32_t *data)
 {
-    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
     int ret;
     uint32_t buf;
 
@@ -389,10 +388,8 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 static int ppc476fs_get_reg(struct reg *reg)
 {
     struct target *target = reg->arch_info;
-    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
     struct ppc476fs_reg_info *reg_data = &reg_info[reg->number];
     int ret;
-    uint32_t code;
 
     if (target->state != TARGET_HALTED) {
         LOG_WARNING("target not halted"); // ??? many dup
@@ -435,7 +432,7 @@ static struct reg_arch_type ppc476fs_reg_type = {
 static void build_reg_caches(struct target *target)
 {
     struct reg_cache *cache = malloc(sizeof(struct reg_cache));
-    int i;
+    size_t i;
     size_t storage_size;
 
     cache->name = "PowerPC General Purpose Registers";
@@ -473,7 +470,7 @@ static void build_reg_caches(struct target *target)
 static void clear_regs_status(struct target *target)
 {
     struct reg_cache *cache = target->reg_cache;
-    int i;
+    size_t i;
 
     while (cache != NULL) {
         for (i = 0; i < cache->num_regs; ++i) {
@@ -489,7 +486,8 @@ static int load_general_regs(struct target *target)
 {
     struct reg_cache *cache = target->reg_cache;
     struct ppc476fs_reg_info *reg_data;
-    int ret, i;
+    int ret;
+    size_t i;
 
     assert(target->state == TARGET_HALTED);
 
@@ -516,7 +514,8 @@ static int write_dirty_regs(struct target *target)
 {
     struct reg_cache *cache = target->reg_cache;
     struct ppc476fs_reg_info *reg_data;
-    int ret, i;
+    int ret;
+    size_t i;
 
     assert(target->state == TARGET_HALTED);
 
@@ -580,7 +579,7 @@ static int ppc476fs_poll(struct target *target)
 
 int ppc476fs_arch_state(struct target *target)
 {
-    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+    // struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
 
 	/* ????LOG_USER("target halted in %s mode due to %s, pc: 0x%8.8" PRIx32 "",
 		mips_isa_strings[mips32->isa_mode],
@@ -655,6 +654,7 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 	else
 		resume_pc = 0; // ??? buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32);
 
+    resume_pc; // ???
     // ???
 
     ret = write_dirty_regs(target);
