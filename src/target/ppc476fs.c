@@ -59,7 +59,7 @@ struct ppc476fs_reg_info
     uint32_t reg_arch_opcode;
 };
 
-static struct ppc476fs_reg_info reg_info[] = {
+static const struct ppc476fs_reg_info reg_info[] = {
     { "R0", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 0 },
     { "R1", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 1 },
     { "R2", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 2 },
@@ -93,7 +93,6 @@ static struct ppc476fs_reg_info reg_info[] = {
     { "R30", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 30 },
     { "R31", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 31 },
     { "LR", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 0x008 },
-    // ??? { "CTR", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 0x009 },
     { "IAR", REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_IAR, 0 },
 };
 
@@ -104,12 +103,17 @@ static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
 	return target->arch_info;
 }
 
-static struct ppc476fs_reg_info *find_reg_index(const char *reg_name)
+static struct reg *find_reg_by_name(struct target *target, const char *reg_name)
 {
-    size_t i;
-    for (i = 0; i < REG_INFO_COUNT; ++i) {
-        if (strcmp(reg_info[i].name, reg_name) == 0)
-            return &reg_info[i];
+    struct reg_cache *cache = target->reg_cache;
+    unsigned i;
+
+    while (cache != NULL) {
+        for (i = 0; i < cache->num_regs; ++i) {
+            if (strcmp(cache->reg_list[i].name, reg_name) == 0)
+                return &cache->reg_list[i];
+        }
+        cache = cache->next;
     }
 
     assert(false);
@@ -166,7 +170,7 @@ int read_JDSR(struct target *target)
     struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 
     uint32_t read_data;
-    int ret = jtag_read_write_register_32(target, 0x2C, 0, 0, &read_data); // 0b0111100 ??? !!! not 2C
+    int ret = jtag_read_write_register_32(target, 0x2C, 0, 0, &read_data); // 0b0101100
 
     if (ret == ERROR_OK)
         ppc476fs->JDSR = read_data;
@@ -290,7 +294,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
     int ret;
     uint32_t code;
     uint32_t save_value, temp_value;
-    struct ppc476fs_reg_info *temp_reg_data;
+    const struct ppc476fs_reg_info *temp_reg_data;
 
     assert(target->state == TARGET_HALTED);
 
@@ -300,7 +304,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
         ret = read_reg_by_code(target, code, data);
         break;
     case PPC476FS_REG_TYPE_SPR:
-        temp_reg_data = find_reg_index("R31");
+        temp_reg_data = &reg_info[find_reg_by_name(target, "R31")->number];
         ret = read_cpu_reg(target, temp_reg_data, &save_value); // save R31
         if (ret != ERROR_OK)
             break;
@@ -314,7 +318,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
         ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
         break;
     case PPC476FS_REG_TYPE_IAR:
-        temp_reg_data = find_reg_index("LR");
+        temp_reg_data = &reg_info[find_reg_by_name(target, "LR")->number];
         ret = read_cpu_reg(target, temp_reg_data, &save_value); // save LR
         if (ret != ERROR_OK)
             break;
@@ -341,7 +345,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
     int ret;
     uint32_t code;
     uint32_t save_value;
-    struct ppc476fs_reg_info *temp_reg_data;
+    const struct ppc476fs_reg_info *temp_reg_data;
 
     assert(target->state == TARGET_HALTED);
 
@@ -351,7 +355,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
         ret = write_reg_by_code(target, code, data);
         break;
     case PPC476FS_REG_TYPE_SPR:
-        temp_reg_data = find_reg_index("R31");
+        temp_reg_data = &reg_info[find_reg_by_name(target, "R31")->number];
         ret = read_cpu_reg(target, temp_reg_data, &save_value); // save R31
         if (ret != ERROR_OK)
             break;
@@ -365,7 +369,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
         ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
         break;
     case PPC476FS_REG_TYPE_IAR:
-        temp_reg_data = find_reg_index("LR");
+        temp_reg_data = &reg_info[find_reg_by_name(target, "LR")->number];
         ret = read_cpu_reg(target, temp_reg_data, &save_value); // save LR
         if (ret != ERROR_OK)
             break;
@@ -388,7 +392,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 static int ppc476fs_get_reg(struct reg *reg)
 {
     struct target *target = reg->arch_info;
-    struct ppc476fs_reg_info *reg_data = &reg_info[reg->number];
+    const struct ppc476fs_reg_info *reg_data = &reg_info[reg->number];
     int ret;
 
     if (target->state != TARGET_HALTED) {
@@ -441,7 +445,7 @@ static void build_reg_caches(struct target *target)
     cache->num_regs = REG_INFO_COUNT;
 
     for (i = 0; i < REG_INFO_COUNT; ++i) {
-        struct ppc476fs_reg_info *reg_data = &reg_info[i];
+        const struct ppc476fs_reg_info *reg_data = &reg_info[i];
         struct reg *reg = &cache->reg_list[i];
 
         reg->name = reg_data->name;
@@ -463,8 +467,6 @@ static void build_reg_caches(struct target *target)
     }
 
     target->reg_cache = cache;
-
-    printf("*** prived 1\n"); // ???
 }
 
 static void clear_regs_status(struct target *target)
@@ -485,7 +487,7 @@ static void clear_regs_status(struct target *target)
 static int load_general_regs(struct target *target)
 {
     struct reg_cache *cache = target->reg_cache;
-    struct ppc476fs_reg_info *reg_data;
+    const struct ppc476fs_reg_info *reg_data;
     int ret;
     size_t i;
 
@@ -513,7 +515,7 @@ static int load_general_regs(struct target *target)
 static int write_dirty_regs(struct target *target)
 {
     struct reg_cache *cache = target->reg_cache;
-    struct ppc476fs_reg_info *reg_data;
+    const struct ppc476fs_reg_info *reg_data;
     int ret;
     size_t i;
 
@@ -529,7 +531,6 @@ static int write_dirty_regs(struct target *target)
                     return ret;
                 }
                 cache->reg_list[i].dirty = false;
-                printf("[*]"); // ???
             }
         }
 
@@ -577,11 +578,25 @@ static int ppc476fs_poll(struct target *target)
     return ERROR_OK;
 }
 
+// call only then the target is halted
 int ppc476fs_arch_state(struct target *target)
 {
-    // struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+    uint32_t IAR_value;
 
+    buf_cpy(find_reg_by_name(target, "IAR")->value, &IAR_value, 32);
+
+    LOG_USER("target halted due to %s, IAR: 0x%08X",
+        debug_reason_name(target),
+        IAR_value);
 	/* ????LOG_USER("target halted in %s mode due to %s, pc: 0x%8.8" PRIx32 "",
+		mips_isa_strings[mips32->isa_mode],
+		debug_reason_name(target),
+		buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));*/
+
+    	// ??? struct mips32_common *mips32 = target_to_mips32(target);
+
+	/* ??? LOG_USER("target halted in %s mode due to %s, pc: 0x%8.8" PRIx32 "",
 		mips_isa_strings[mips32->isa_mode],
 		debug_reason_name(target),
 		buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));*/
@@ -634,7 +649,6 @@ static int ppc476fs_halt(struct target *target)
 static int ppc476fs_resume(struct target *target, int current, uint32_t address, int handle_breakpoints, int debug_execution)
 {
     struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
-	uint32_t resume_pc;
     int ret;
 
 	if (target->state != TARGET_HALTED) {
@@ -648,14 +662,15 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 		// ??? mips_m4k_enable_watchpoints(target);
 	// ??? }
 
-	/* current = 1: continue on current pc, otherwise continue at <address> */ //????
-	if (!current)
-		resume_pc = address;
-	else
-		resume_pc = 0; // ??? buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32);
-
-    resume_pc; // ???
-    // ???
+	// current = 1: continue on current pc, otherwise continue at <address>
+	if (!current) {
+        struct reg *IAR = find_reg_by_name(target, "IAR");
+        ret = IAR->type->set(IAR, (void*)&address);
+        if (ret != ERROR_OK) {
+            LOG_ERROR("cannot set IAR register");
+            return ret;
+        }
+    }
 
     ret = write_dirty_regs(target);
     if (ret != ERROR_OK) {
@@ -706,6 +721,112 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
     clear_regs_status(target);
 
     return ERROR_OK;
+}
+
+// R0, R1 is already saved
+// Register autoincrement mode is not used becasue of JTAG communication bug
+static int read_memory_internal(struct target *target, uint32_t address, uint32_t size, uint32_t count, uint8_t *buffer)
+{
+    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+    const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
+    const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
+    uint32_t code, shift, i, j, value;
+    int ret;
+
+    switch (size)
+    {
+    case 1:
+        code = 0x88010000; // lbz %R0, 0(%R1)
+        shift = 24;
+        break;
+    case 2:
+        code = 0xA0010000; // lhz %R0, 0(%R1)
+        shift = 16;
+        break;
+    case 4:
+        code = 0x80010000; // lwz %R0, 0(%R1)
+        shift = 0;
+        break;
+    default:
+        assert(false);
+    }
+
+    for (i = 0; i < count; ++i) {
+        ret = write_cpu_reg(target, R1_reg_data, &address);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = stuff_code(target, code);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = read_cpu_reg(target, R0_reg_data, &value);
+        if (ret != ERROR_OK)
+            return ret;
+        value <<= shift;
+        for (j = 0; j < size; ++j)
+        {
+            *(buffer++) = (value >> 24);
+            value <<= 8;
+        }
+        address += size;
+    }
+
+    return ERROR_OK;
+}
+
+static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_t size, uint32_t count, uint8_t *buffer)
+{
+    const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
+    const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
+    uint32_t R0_save_value;
+    uint32_t R1_save_value;
+    int ret, main_ret;
+
+    // ???
+	// LOG_DEBUG("address: 0x%8.8" PRIx32 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+	// 		address, size, count);
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1)))
+		return ERROR_TARGET_UNALIGNED_ACCESS;
+
+    memset(buffer, 0, size * count); // clear result buffer
+
+    ret = read_cpu_reg(target, R0_reg_data, &R0_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot read cpu register"); // ??? dup
+        return ret;
+    }
+
+    ret = read_cpu_reg(target, R1_reg_data, &R1_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot read cpu register"); // ??? dup
+        return ret;
+    }
+
+    main_ret = read_memory_internal(target, address, size, count, buffer);
+    if (main_ret != ERROR_OK)
+        LOG_ERROR("cannot read memory"); // ???
+    
+    ret = write_cpu_reg(target, R1_reg_data, &R1_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot write cpu register"); // ??? dup
+        if (main_ret == ERROR_OK) main_ret = ret;
+    }
+
+    ret = write_cpu_reg(target, R0_reg_data, &R0_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot write cpu register"); // ??? dup
+        if (main_ret == ERROR_OK) main_ret = ret;
+    }
+
+    return main_ret;
 }
 
 static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
@@ -762,42 +883,10 @@ static const struct command_registration ppc476fs_exec_command_handlers[] = {
 		.usage = "status",
 		.help = "display status"
 	},
-	// {
-	// 	.name = "smp_off",
-	// 	.handler = mips_m4k_handle_smp_off_command,
-	// 	.mode = COMMAND_EXEC,
-	// 	.help = "Stop smp handling",
-	// 	.usage = "",},
-
-	// {
-	// 	.name = "smp_on",
-	// 	.handler = mips_m4k_handle_smp_on_command,
-	// 	.mode = COMMAND_EXEC,
-	// 	.help = "Restart smp handling",
-	// 	.usage = "",
-	// },
-	// {
-	// 	.name = "smp_gdb",
-	// 	.handler = mips_m4k_handle_smp_gdb_command,
-	// 	.mode = COMMAND_EXEC,
-	// 	.help = "display/fix current core played to gdb",
-	// 	.usage = "",
-	// },
-	// {
-	// 	.name = "scan_delay",
-	// 	.handler = mips_m4k_handle_scan_delay_command,
-	// 	.mode = COMMAND_ANY,
-	// 	.help = "display/set scan delay in nano seconds",
-	// 	.usage = "[value]",
-	// },
 	COMMAND_REGISTRATION_DONE
 };
 
 const struct command_registration ppc476fs_command_handlers[] = {
-    // ???
-	// {
-	// 	.chain = mips32_command_handlers,
-	// },
 	{
 		.name = "ppc476fs",
 		.mode = COMMAND_ANY,
@@ -823,7 +912,7 @@ struct target_type ppc476fs_target = {
 
 	// .get_gdb_reg_list = mips32_get_gdb_reg_list,
 
-	// .read_memory = mips_m4k_read_memory,
+	.read_memory = ppc476fs_read_memory,
 	// .write_memory = mips_m4k_write_memory,
 	// .checksum_memory = mips32_checksum_memory,
 	// .blank_check_memory = mips32_blank_check_memory,
