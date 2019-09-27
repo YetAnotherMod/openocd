@@ -12,6 +12,7 @@
 #define JDSR_PSP_MASK (1 << 31)
 
 #define JDCR_STO_MASK (1 << 0)
+#define JDCR_SS_MASK (1 << 2)
 #define JDCR_FT_MASK (1 << 6)
 #define JDCR_DWS_MASK (1 << 9)
 
@@ -708,6 +709,8 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
         return ret;
     }
 
+    clear_regs_status(target);
+
 	if (!debug_execution) {
 		target->state = TARGET_RUNNING;
 		// ??? target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
@@ -718,9 +721,91 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 		// ??? LOG_DEBUG("target debug resumed at 0x%" PRIx32 "", resume_pc);
 	}
 
+    return ERROR_OK;
+}
+
+static int ppc476fs_step(struct target *target, int current, uint32_t address, int handle_breakpoints)
+{
+    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+    int ret;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	// ??? struct breakpoint *breakpoint = NULL;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	// current = 1: continue on current pc, otherwise continue at <address>
+	if (!current) {
+        struct reg *IAR = find_reg_by_name(target, "IAR");
+        ret = IAR->type->set(IAR, (void*)&address);
+        if (ret != ERROR_OK) {
+            LOG_ERROR("cannot set IAR register");
+            return ret;
+        }
+    }
+
+	/* the front-end may request us not to handle breakpoints */
+    // ???
+	// if (handle_breakpoints) {
+	// 	breakpoint = breakpoint_find(target,
+	// 			buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));
+	// 	if (breakpoint)
+	// 		mips_m4k_unset_breakpoint(target, breakpoint);
+	// }
+
+	/* restore context */
+	// ??? mips32_restore_context(target);
+    ret = write_dirty_regs(target);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot write dirty cpu registers"); // ???
+        return ret;
+    }
+
+	/* configure single step mode */
+	// ??? mips_ejtag_config_step(ejtag_info, 1);
+
+	target->debug_reason = DBG_REASON_SINGLESTEP;
+
+    ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_SS_MASK);
+    if (ret != ERROR_OK) {
+		LOG_ERROR("cannot set JDCR register");
+        return ret;
+    }
+
     clear_regs_status(target);
 
-    return ERROR_OK;
+    target->state = TARGET_DEBUG_RUNNING;
+
+	// ??? target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
+
+	/* disable interrupts while stepping */
+	// ??? mips32_enable_interrupts(target, 0);
+
+	/* exit debug mode */
+	// ??? mips_ejtag_exit_debug(ejtag_info);
+
+	/* registers are now invalid */
+	// ??? register_cache_invalidate(mips32->core_cache);
+
+    // ???
+	// LOG_DEBUG("target stepped ");
+	// mips_m4k_debug_entry(target);
+
+    // ???
+	// if (breakpoint)
+	// 	mips_m4k_set_breakpoint(target, breakpoint);
+
+    // ???
+	// target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+
+	return ERROR_OK;
 }
 
 // R0, R1 is already saved
@@ -781,10 +866,6 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
     uint32_t R1_save_value;
     int ret, main_ret;
 
-    // ???
-	// LOG_DEBUG("address: 0x%8.8" PRIx32 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
-	// 		address, size, count);
-
 	if (target->state != TARGET_HALTED) {
 		LOG_WARNING("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
@@ -811,6 +892,103 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
     }
 
     main_ret = read_memory_internal(target, address, size, count, buffer);
+    if (main_ret != ERROR_OK)
+        LOG_ERROR("cannot read memory"); // ???
+    
+    ret = write_cpu_reg(target, R1_reg_data, &R1_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot write cpu register"); // ??? dup
+        if (main_ret == ERROR_OK) main_ret = ret;
+    }
+
+    ret = write_cpu_reg(target, R0_reg_data, &R0_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot write cpu register"); // ??? dup
+        if (main_ret == ERROR_OK) main_ret = ret;
+    }
+
+    return main_ret;
+}
+
+// R0, R1 is already saved
+// Register autoincrement mode is not used becasue of JTAG communication bug
+static int write_memory_internal(struct target *target, uint32_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
+{
+    struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+    const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
+    const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
+    uint32_t code, i, j, value;
+    int ret;
+
+    switch (size)
+    {
+    case 1:
+        code = 0x98010000; // stb %R0, 0(%R1)
+        break;
+    case 2:
+        code = 0xB0010000; // sth %R0, 0(%R1)
+        break;
+    case 4:
+        code = 0x90010000; // stw %R0, 0(%R1)
+        break;
+    default:
+        assert(false);
+    }
+
+    for (i = 0; i < count; ++i) {
+        ret = write_cpu_reg(target, R1_reg_data, &address);
+        if (ret != ERROR_OK)
+            return ret;
+        value = 0;
+        for (j = 0; j < size; ++j)
+        {
+            value <<= 8;
+            value |= (uint32_t)*(buffer++);
+        }
+        ret = write_cpu_reg(target, R0_reg_data, &value);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = stuff_code(target, code);
+        if (ret != ERROR_OK)
+            return ret;
+        address += size;
+    }
+
+    return ERROR_OK;
+}
+
+static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
+{
+    const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
+    const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
+    uint32_t R0_save_value;
+    uint32_t R1_save_value;
+    int ret, main_ret;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u)))
+		return ERROR_TARGET_UNALIGNED_ACCESS;
+
+    ret = read_cpu_reg(target, R0_reg_data, &R0_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot read cpu register"); // ??? dup
+        return ret;
+    }
+
+    ret = read_cpu_reg(target, R1_reg_data, &R1_save_value);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("cannot read cpu register"); // ??? dup
+        return ret;
+    }
+
+    main_ret = write_memory_internal(target, address, size, count, buffer);
     if (main_ret != ERROR_OK)
         LOG_ERROR("cannot read memory"); // ???
     
@@ -905,7 +1083,7 @@ struct target_type ppc476fs_target = {
 
 	.halt = ppc476fs_halt,
 	.resume = ppc476fs_resume,
-	// .step = mips_m4k_step,
+	.step = ppc476fs_step,
 
 	// .assert_reset = mips_m4k_assert_reset,
 	// .deassert_reset = mips_m4k_deassert_reset,
@@ -913,7 +1091,7 @@ struct target_type ppc476fs_target = {
 	// .get_gdb_reg_list = mips32_get_gdb_reg_list,
 
 	.read_memory = ppc476fs_read_memory,
-	// .write_memory = mips_m4k_write_memory,
+	.write_memory = ppc476fs_write_memory,
 	// .checksum_memory = mips32_checksum_memory,
 	// .blank_check_memory = mips32_blank_check_memory,
 
