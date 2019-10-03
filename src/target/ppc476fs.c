@@ -2,46 +2,47 @@
 #include "config.h"
 #endif
 
-//??? #include "breakpoints.h"
 #include <helper/log.h> // ???
 #include <jtag/jtag.h> // ???
 #include "target.h"
 #include "target_type.h"
 #include "register.h"
+#include "breakpoints.h"
 
 #define JDSR_PSP_MASK (1 << 31)
 
 #define JDCR_STO_MASK (1 << 0)
 #define JDCR_SS_MASK (1 << 2)
-#define JDCR_FT_MASK (1 << 6)
-#define JDCR_DWS_MASK (1 << 9)
+#define JDCR_FT_MASK (1 << 6) /* ??? */
+#define JDCR_RSDBSR_MASK (1 << 8)
+#define JDCR_DWS_MASK (1 << 9) /* ??? */
+
+#define DBCR0_EDM_MASK (1 << (63 - 32))
+#define DBCR0_IAC1_MASK (1 << (63 - 40))
+#define DBCR0_FT_MASK (1 << (63 - 63))
+
+#define DBSR_IAC1_MASK (1 << (63 - 40))
+#define DBSR_IAC2_MASK (1 << (63 - 41))
+#define DBSR_IAC3_MASK (1 << (63 - 42))
+#define DBSR_IAC4_MASK (1 << (63 - 43))
+#define DBSR_DAC1R_MASK (1 << (63 - 44))
+#define DBSR_DAC1W_MASK (1 << (63 - 45))
+#define DBSR_DAC2R_MASK (1 << (63 - 46))
+#define DBSR_DAC2W_MASK (1 << (63 - 47))
+#define DBSR_IAC_ALL_MASK (DBSR_IAC1_MASK | DBSR_IAC2_MASK | DBSR_IAC3_MASK | DBSR_IAC4_MASK)
+#define DBSR_DAC_ALL_MASK (DBSR_DAC1R_MASK | DBSR_DAC1W_MASK | DBSR_DAC2R_MASK | DBSR_DAC2W_MASK)
+
+#define MSR_FP_MASK (1 << (63 - 50)) /* ??? */
 
 struct ppc476fs_common {
-	uint32_t JDSR;
-	uint32_t JDCR;
+	uint32_t JDSR; // ???
+	uint32_t JDCR; // ????
 	uint32_t JISB; // ????
 	uint32_t DBDR; // ????
-	// uint32_t common_magic;
-	// void *arch_info;
-	// struct reg_cache *core_cache;
-	// struct mips_ejtag ejtag_info;
-	// uint32_t core_regs[MIPS32NUMCOREREGS];
-	// enum mips32_isa_mode isa_mode;
-
-	/* working area for fastdata access */
-	// struct working_area *fast_data_area;
-
-	// int bp_scanned;
-	// int num_inst_bpoints;
-	// int num_data_bpoints;
-	// int num_inst_bpoints_avail;
-	// int num_data_bpoints_avail;
-	// struct mips32_comparator *inst_break_list;
-	// struct mips32_comparator *data_break_list;
-
-	// /* register cache to processor synchronization */
-	// int (*read_core_reg)(struct target *target, unsigned int num);
-	// int (*write_core_reg)(struct target *target, unsigned int num);
+	uint32_t DBCR0; // ???
+	uint32_t DBCR1; // ???
+	uint32_t DBCR2; // ???
+	uint32_t DBSR; // ???
 };
 
 enum ppc476fs_reg_arch_type
@@ -63,85 +64,106 @@ struct ppc476fs_reg_info
 	int bit_size;
 	enum ppc476fs_reg_arch_type reg_arch_type;
 	uint32_t reg_arch_opcode;
+	char *feature;
 };
 
 // index of the item equals DGB register number
 static const struct ppc476fs_reg_info reg_info[] = {
-	{ "R0", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 0 },
-	{ "R1", 1, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 1 },
-	{ "R2", 2, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 2 },
-	{ "R3", 3, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 3 },
-	{ "R4", 4, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 4 },
-	{ "R5", 5, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 5 },
-	{ "R6", 6, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 6 },
-	{ "R7", 7, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 7 },
-	{ "R8", 8, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 8 },
-	{ "R9", 9, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 9 },
-	{ "R10", 10, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 10 },
-	{ "R11", 11, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 11 },
-	{ "R12", 12, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 12 },
-	{ "R13", 13, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 13 },
-	{ "R14", 14, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 14 },
-	{ "R15", 15, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 15 },
-	{ "R16", 16, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 16 },
-	{ "R17", 17, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 17 },
-	{ "R18", 18, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 18 },
-	{ "R19", 19, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 19 },
-	{ "R20", 20, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 20 },
-	{ "R21", 21, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 21 },
-	{ "R22", 22, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 22 },
-	{ "R23", 23, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 23 },
-	{ "R24", 24, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 24 },
-	{ "R25", 25, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 25 },
-	{ "R26", 26, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 26 },
-	{ "R27", 27, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 27 },
-	{ "R28", 28, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 28 },
-	{ "R29", 29, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 29 },
-	{ "R30", 30, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 30 },
-	{ "R31", 31, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 31 },
-	{ "F0", 32, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 0 },
-	{ "F1", 33, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 1 },
-	{ "F2", 34, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 2 },
-	{ "F3", 35, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 3 },
-	{ "F4", 36, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 4 },
-	{ "F5", 37, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 5 },
-	{ "F6", 38, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 6 },
-	{ "F7", 39, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 7 },
-	{ "F8", 40, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 8 },
-	{ "F9", 41, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 9 },
-	{ "F10", 42, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 10 },
-	{ "F11", 43, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 11 },
-	{ "F12", 44, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 12 },
-	{ "F13", 45, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 13 },
-	{ "F14", 46, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 14 },
-	{ "F15", 47, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 15 },
-	{ "F16", 48, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 16 },
-	{ "F17", 49, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 17 },
-	{ "F18", 50, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 18 },
-	{ "F19", 51, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 19 },
-	{ "F20", 52, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 20 },
-	{ "F21", 53, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 21 },
-	{ "F22", 54, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 22 },
-	{ "F23", 55, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 23 },
-	{ "F24", 56, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 24 },
-	{ "F25", 57, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 25 },
-	{ "F26", 58, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 26 },
-	{ "F27", 59, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 27 },
-	{ "F28", 60, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 28 },
-	{ "F29", 61, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 29 },
-	{ "F30", 62, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 30 },
-	{ "F31", 63, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 31 },
-	{ "IAR", 64, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_IAR, 0 },
-	{ "MSR", 65, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_MSR, 0 },
-	{ "CR", 66, REG_TYPE_CODE_PTR, 32, PPC476FS_REG_TYPE_CR, 0 },
-	{ "LR", 67, REG_TYPE_CODE_PTR, 32, PPC476FS_REG_TYPE_SPR, 8 },
-	{ "CTR", 68, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 9 },
-	{ "XER", 69, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 1 },
-	{ "FPSCR", 70, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_FPSCR, 0 }
+	{ "R0", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 0, "org.gnu.gdb.power.core" },
+	{ "R1", 1, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 1, "org.gnu.gdb.power.core" },
+	{ "R2", 2, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 2, "org.gnu.gdb.power.core" },
+	{ "R3", 3, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 3, "org.gnu.gdb.power.core" },
+	{ "R4", 4, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 4, "org.gnu.gdb.power.core" },
+	{ "R5", 5, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 5, "org.gnu.gdb.power.core" },
+	{ "R6", 6, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 6, "org.gnu.gdb.power.core" },
+	{ "R7", 7, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 7, "org.gnu.gdb.power.core" },
+	{ "R8", 8, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 8, "org.gnu.gdb.power.core" },
+	{ "R9", 9, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 9, "org.gnu.gdb.power.core" },
+	{ "R10", 10, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 10, "org.gnu.gdb.power.core" },
+	{ "R11", 11, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 11, "org.gnu.gdb.power.core" },
+	{ "R12", 12, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 12, "org.gnu.gdb.power.core" },
+	{ "R13", 13, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 13, "org.gnu.gdb.power.core" },
+	{ "R14", 14, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 14, "org.gnu.gdb.power.core" },
+	{ "R15", 15, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 15, "org.gnu.gdb.power.core" },
+	{ "R16", 16, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 16, "org.gnu.gdb.power.core" },
+	{ "R17", 17, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 17, "org.gnu.gdb.power.core" },
+	{ "R18", 18, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 18, "org.gnu.gdb.power.core" },
+	{ "R19", 19, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 19, "org.gnu.gdb.power.core" },
+	{ "R20", 20, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 20, "org.gnu.gdb.power.core" },
+	{ "R21", 21, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 21, "org.gnu.gdb.power.core" },
+	{ "R22", 22, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 22, "org.gnu.gdb.power.core" },
+	{ "R23", 23, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 23, "org.gnu.gdb.power.core" },
+	{ "R24", 24, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 24, "org.gnu.gdb.power.core" },
+	{ "R25", 25, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 25, "org.gnu.gdb.power.core" },
+	{ "R26", 26, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 26, "org.gnu.gdb.power.core" },
+	{ "R27", 27, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 27, "org.gnu.gdb.power.core" },
+	{ "R28", 28, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 28, "org.gnu.gdb.power.core" },
+	{ "R29", 29, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 29, "org.gnu.gdb.power.core" },
+	{ "R30", 30, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 30, "org.gnu.gdb.power.core" },
+	{ "R31", 31, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_GPR, 31, "org.gnu.gdb.power.core" },
+	{ "F0", 32, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 0, "org.gnu.gdb.power.fpu" },
+	{ "F1", 33, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 1, "org.gnu.gdb.power.fpu"  },
+	{ "F2", 34, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 2, "org.gnu.gdb.power.fpu"  },
+	{ "F3", 35, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 3, "org.gnu.gdb.power.fpu"  },
+	{ "F4", 36, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 4, "org.gnu.gdb.power.fpu"  },
+	{ "F5", 37, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 5, "org.gnu.gdb.power.fpu"  },
+	{ "F6", 38, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 6, "org.gnu.gdb.power.fpu"  },
+	{ "F7", 39, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 7, "org.gnu.gdb.power.fpu"  },
+	{ "F8", 40, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 8, "org.gnu.gdb.power.fpu"  },
+	{ "F9", 41, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 9, "org.gnu.gdb.power.fpu"  },
+	{ "F10", 42, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 10, "org.gnu.gdb.power.fpu"  },
+	{ "F11", 43, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 11, "org.gnu.gdb.power.fpu"  },
+	{ "F12", 44, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 12, "org.gnu.gdb.power.fpu"  },
+	{ "F13", 45, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 13, "org.gnu.gdb.power.fpu"  },
+	{ "F14", 46, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 14, "org.gnu.gdb.power.fpu"  },
+	{ "F15", 47, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 15, "org.gnu.gdb.power.fpu"  },
+	{ "F16", 48, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 16, "org.gnu.gdb.power.fpu"  },
+	{ "F17", 49, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 17, "org.gnu.gdb.power.fpu"  },
+	{ "F18", 50, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 18, "org.gnu.gdb.power.fpu"  },
+	{ "F19", 51, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 19, "org.gnu.gdb.power.fpu"  },
+	{ "F20", 52, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 20, "org.gnu.gdb.power.fpu"  },
+	{ "F21", 53, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 21, "org.gnu.gdb.power.fpu"  },
+	{ "F22", 54, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 22, "org.gnu.gdb.power.fpu"  },
+	{ "F23", 55, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 23, "org.gnu.gdb.power.fpu"  },
+	{ "F24", 56, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 24, "org.gnu.gdb.power.fpu"  },
+	{ "F25", 57, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 25, "org.gnu.gdb.power.fpu"  },
+	{ "F26", 58, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 26, "org.gnu.gdb.power.fpu"  },
+	{ "F27", 59, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 27, "org.gnu.gdb.power.fpu"  },
+	{ "F28", 60, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 28, "org.gnu.gdb.power.fpu"  },
+	{ "F29", 61, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 29, "org.gnu.gdb.power.fpu"  },
+	{ "F30", 62, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 30, "org.gnu.gdb.power.fpu"  },
+	{ "F31", 63, REG_TYPE_IEEE_DOUBLE, 64, PPC476FS_REG_TYPE_FPR, 31, "org.gnu.gdb.power.fpu"  },
+	{ "PC", 64, REG_TYPE_CODE_PTR, 32, PPC476FS_REG_TYPE_IAR, 0, "org.gnu.gdb.power.core" },
+	{ "MSR", 65, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_MSR, 0, "org.gnu.gdb.power.core" },
+	{ "CR", 66, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_CR, 0, "org.gnu.gdb.power.core" },
+	{ "LR", 67, REG_TYPE_CODE_PTR, 32, PPC476FS_REG_TYPE_SPR, 8, "org.gnu.gdb.power.core" },
+	{ "CTR", 68, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 9, "org.gnu.gdb.power.core" },
+	{ "XER", 69, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 1, "org.gnu.gdb.power.core" },
+	{ "FPSCR", 70, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_FPSCR, 0, "org.gnu.gdb.power.fpu"  }
 };
 
 #define REG_INFO_COUNT (sizeof reg_info / sizeof reg_info[0])
 #define REG_GDB_COUNT 70
+
+// ???
+static const struct ppc476fs_reg_info DBCR0_data = {
+	"DBCR0", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 308, NULL
+};
+static const struct ppc476fs_reg_info DBCR1_data = {
+	"DBCR1", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 309, NULL
+};
+static const struct ppc476fs_reg_info DBCR2_data = {
+	"DBCR2", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 310, NULL
+};
+static const struct ppc476fs_reg_info DBSR_data = {
+	"DBSR", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 304, NULL
+};
+static const struct ppc476fs_reg_info IACx_data[4] = {
+	{ "IAC1", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 312, NULL },
+	{ "IAC2", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 313, NULL },
+	{ "IAC3", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 314, NULL },
+	{ "IAC4", 0, REG_TYPE_UINT32, 32, PPC476FS_REG_TYPE_SPR, 315, NULL },
+};
 
 static int ppc476fs_get_reg(struct reg *reg);
 static int ppc476fs_set_reg(struct reg *reg, uint8_t *buf);
@@ -251,7 +273,7 @@ int write_JDCR_read_JDSR(struct target *target, uint32_t write_data)
 
 	if (ret == ERROR_OK) {
 		ppc476fs->JDSR = read_data;
-		ppc476fs->JDCR = write_data;
+		ppc476fs->JDCR = write_data & ~JDCR_SS_MASK & ~JDCR_RSDBSR_MASK; // ????
 	}
 
 	return ret;
@@ -353,12 +375,86 @@ static int write_reg_by_code(struct target *target, uint32_t code, const uint32_
 static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *reg_data, void *data);
 static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *reg_data, const void *data);
 
+// MSR, R1(SP), R2 are already saved, and R1(SP) is correct aligned
+static int read_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_value, uint32_t reg_number, void *data)
+{
+	const struct ppc476fs_reg_info *temp_reg_data_1 = &reg_info[find_reg_by_name(target, "R1")->number]; // ??? name
+	const struct ppc476fs_reg_info *temp_reg_data_2 = &reg_info[find_reg_by_name(target, "R2")->number]; // ??? name
+	const struct ppc476fs_reg_info *temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number]; // ??? name
+	uint32_t code, value, value_high, value_low;
+	int ret;
+
+	// ??? restore memory area
+
+	// save magic numbers
+	value = 0x83AFC410;
+	ret = write_cpu_reg(target, temp_reg_data_2, &value); // ???
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x9041FFF8; // stw R2, -8(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	value = 0x014CFA38;
+	ret = write_cpu_reg(target, temp_reg_data_2, &value); // ???
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x9041FFFC; // stw R2, -4(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+
+	value = msr_value | MSR_FP_MASK; // ???
+	ret = write_cpu_reg(target, temp_reg_data_3, &value); // ???
+	if (ret != ERROR_OK)
+		return ret;
+
+	code = 0xD801FFF8 | (reg_number << 21); // stfd Fx, -8(r1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+
+	code = 0x8041FFF8; // lfw R2, -8(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	ret  = read_cpu_reg(target, temp_reg_data_2, &value_high);
+	if (ret != ERROR_OK)
+		return ret;
+
+	code = 0x8041FFFC; // lfw R2, -4(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	ret  = read_cpu_reg(target, temp_reg_data_2, &value_low);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if ((value_high == 0x83AFC410) && (value_low == 0x014CFA38)) // ??? const
+		return ERROR_FAIL;
+
+	// ??? value_low = htonl(value_low); // ???
+	// ??? value_high = htonl(value_high); // ???
+
+	memcpy(data, &value_high, 4); // ???
+	memcpy(data + 4, &value_low, 4); // ???
+
+	return ERROR_OK;
+}
+
 static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *reg_data, void *data)
 {
-	int ret;
+	int ret, main_ret;
 	uint32_t code;
+	uint32_t value; // ???
 	uint32_t save_value, temp_value;
+	uint32_t save_value_2; // ???
+	uint32_t save_value_3; // ???
+	uint64_t save_value_64; // ???
+	uint64_t temp_value_64; // ???
 	const struct ppc476fs_reg_info *temp_reg_data;
+	const struct ppc476fs_reg_info *temp_reg_data_2;
+	const struct ppc476fs_reg_info *temp_reg_data_3;
 
 	assert(target->state == TARGET_HALTED);
 
@@ -368,20 +464,31 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		ret = read_reg_by_code(target, code, data);
 		break;
 	case PPC476FS_REG_TYPE_FPR:
-		/* ???? temp_reg_data = &reg_info[find_reg_by_name(target, "R31")->number];
-		ret = read_cpu_reg(target, temp_reg_data, &save_value); // save R31
+		temp_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
+		temp_reg_data_2 = &reg_info[find_reg_by_name(target, "R2")->number];
+		temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number];
+		ret = read_cpu_reg(target, temp_reg_data, &save_value); // save R1 (stack)
+		if (ret != ERROR_OK)
+			break; // return all ???
+		if ((save_value < 8) || ((save_value & 0x3) != 0)) // check stack pointer
+			return ERROR_FAIL;
+		ret = read_cpu_reg(target, temp_reg_data_2, &save_value_2); // save R2
 		if (ret != ERROR_OK)
 			break;
-		code = 0x7FE00026; // mfcr R31
-		ret = stuff_code(target, code);
+		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
 		if (ret != ERROR_OK)
 			break;
-		ret = read_cpu_reg(target, temp_reg_data, data); // read R31
-		if (ret != ERROR_OK)
-			break;
-		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31*/
-		memset(data, 0, 8); // ???
-		ret = ERROR_OK;
+		main_ret = read_fpu_reg(target, save_value_3, save_value, reg_data->reg_arch_opcode, data); // ???
+		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
+		if (main_ret == ERROR_OK) // ???
+			main_ret = ret;
+		ret = write_cpu_reg(target, temp_reg_data_2, &save_value_2); // restore R2
+		if (main_ret == ERROR_OK) // ???
+			main_ret = ret;
+		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R1
+		if (main_ret == ERROR_OK) // ???
+			main_ret = ret;
+		ret = main_ret;
 		break;
 	case PPC476FS_REG_TYPE_SPR:
 		temp_reg_data = &reg_info[find_reg_by_name(target, "R31")->number];
@@ -442,8 +549,30 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
 		break;
 	case PPC476FS_REG_TYPE_FPSCR:
-		memset(data, 0, 4); // ???
-		ret = ERROR_OK;
+		temp_reg_data = &reg_info[find_reg_by_name(target, "F0")->number];
+		temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number];
+		ret = read_cpu_reg(target, temp_reg_data, &save_value_64); // save F0
+		if (ret != ERROR_OK)
+			return ret;
+		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
+		if (ret != ERROR_OK)
+			break;
+		value = save_value_3 | MSR_FP_MASK; // ???
+		ret = write_cpu_reg(target, temp_reg_data_3, &value); // ???
+		if (ret != ERROR_OK)
+			return ret;
+		code = 0xFC00048E; // mffs F0
+		ret = stuff_code(target, code);
+		if (ret != ERROR_OK)
+			break;
+		ret = read_cpu_reg(target, temp_reg_data, &temp_value_64); // read F0
+		if (ret != ERROR_OK)
+			break;
+		memcpy(data, ((void*)&temp_value_64) + 4, 4); // ???
+		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
+		if (ret != ERROR_OK) // ???
+			return ret;
+		ret = write_cpu_reg(target, temp_reg_data, &save_value_64); // restore R31
 		break;
 	default:
 		assert(false);
@@ -452,12 +581,81 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 	return ret;
 }
 
+// MSR, R1(SP), R2 are already saved, and R1(SP) is correct aligned
+static int write_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_value, uint32_t reg_number, const void *data)
+{
+	const struct ppc476fs_reg_info *temp_reg_data_1 = &reg_info[find_reg_by_name(target, "R1")->number]; // ??? name
+	const struct ppc476fs_reg_info *temp_reg_data_2 = &reg_info[find_reg_by_name(target, "R2")->number]; // ??? name
+	const struct ppc476fs_reg_info *temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number]; // ??? name
+	uint32_t code, value, value_high, value_low;
+	int ret;
+
+	// ??? restore memory area
+
+	memcpy(&value_high, data, 4); // ???
+	memcpy(&value_low, data + 4, 4); // ???*/
+
+	value = value_high;
+	ret = write_cpu_reg(target, temp_reg_data_2, &value); // ???
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x9041FFF8; // stw R2, -8(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x8041FFF8; // lfw R2, -8(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	ret  = read_cpu_reg(target, temp_reg_data_2, &value);
+	if (ret != ERROR_OK)
+		return ret;
+	if (value != value_high)
+		return ERROR_FAIL;
+
+
+	value = value_low;
+	ret = write_cpu_reg(target, temp_reg_data_2, &value); // ???
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x9041FFFC; // stw R2, -4(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x8041FFFC; // lfw R2, -4(R1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	ret  = read_cpu_reg(target, temp_reg_data_2, &value);
+	if (ret != ERROR_OK)
+		return ret;
+	if (value != value_low)
+		return ERROR_FAIL;
+
+	value = msr_value | MSR_FP_MASK; // ???
+	ret = write_cpu_reg(target, temp_reg_data_3, &value); // ???
+	if (ret != ERROR_OK)
+		return ret;
+
+	code = 0xC801FFF8 | (reg_number << 21); // lfd Fx, -8(r1)
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
 static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *reg_data, const void *data)
 {
-	int ret;
+	int ret, main_ret;
 	uint32_t code;
-	uint32_t save_value;
+	uint32_t save_value, save_value_2, save_value_3; // ????
+	uint64_t save_value_64; // ???
+	uint32_t value;
+	uint64_t temp_value_64;
 	const struct ppc476fs_reg_info *temp_reg_data;
+	const struct ppc476fs_reg_info *temp_reg_data_2; // ???
+	const struct ppc476fs_reg_info *temp_reg_data_3; // ???
 
 	assert(target->state == TARGET_HALTED);
 
@@ -467,10 +665,31 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		ret = write_reg_by_code(target, code, data);
 		break;
 	case PPC476FS_REG_TYPE_FPR:
-		//
-		// ???
-		//
-		ret = ERROR_OK; // ???
+		temp_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
+		temp_reg_data_2 = &reg_info[find_reg_by_name(target, "R2")->number];
+		temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number];
+		ret = read_cpu_reg(target, temp_reg_data, &save_value); // save R1 (stack)
+		if (ret != ERROR_OK)
+			break; // return all ???
+		if ((save_value < 8) || ((save_value & 0x3) != 0)) // check stack pointer
+			return ERROR_FAIL;
+		ret = read_cpu_reg(target, temp_reg_data_2, &save_value_2); // save R2
+		if (ret != ERROR_OK)
+			break;
+		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
+		if (ret != ERROR_OK)
+			break;
+		main_ret = write_fpu_reg(target, save_value_3, save_value, reg_data->reg_arch_opcode, data); // ???
+		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
+		if (main_ret == ERROR_OK) // ???
+			main_ret = ret;
+		ret = write_cpu_reg(target, temp_reg_data_2, &save_value_2); // restore R2
+		if (main_ret == ERROR_OK) // ???
+			main_ret = ret;
+		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R1
+		if (main_ret == ERROR_OK) // ???
+			main_ret = ret;
+		ret = main_ret;
 		break;
 	case PPC476FS_REG_TYPE_SPR:
 		temp_reg_data = &reg_info[find_reg_by_name(target, "R31")->number];
@@ -529,15 +748,111 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
 		break;
 	case PPC476FS_REG_TYPE_FPSCR:
-		//
-		// ???
-		//
-		ret = ERROR_OK;
+		temp_reg_data = &reg_info[find_reg_by_name(target, "F0")->number];
+		temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number];
+		ret = read_cpu_reg(target, temp_reg_data, &save_value_64); // save F0
+		if (ret != ERROR_OK)
+			return ret;
+		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
+		if (ret != ERROR_OK)
+			break;
+		value = save_value_3 | MSR_FP_MASK; // ???
+		ret = write_cpu_reg(target, temp_reg_data_3, &value); // ???
+		if (ret != ERROR_OK)
+			return ret;
+		temp_value_64 = 0;
+		memcpy(((void*)&temp_value_64) + 4, data, 4); // ???
+		ret = write_cpu_reg(target, temp_reg_data, &temp_value_64); // read F0
+		if (ret != ERROR_OK)
+			break;
+		code = 0xFDFE058E; // mtfsf 255, F0		              
+		ret = stuff_code(target, code);
+		if (ret != ERROR_OK)
+			break;
+		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
+		if (ret != ERROR_OK) // ???
+			return ret;
+		ret = write_cpu_reg(target, temp_reg_data, &save_value_64); // restore R31
+		break;
 	default:
 		assert(false);
 	}
 
 	return ret;
+}
+
+static int write_DBCR0(struct target *target, uint32_t data)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	// ??? uint32_t buffer; // ????
+	// ??? buffer = flip_u32(data, 32);
+
+	ret = write_cpu_reg(target, &DBCR0_data, &data);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fs->DBCR0 = data;
+
+	return ERROR_OK;
+}
+
+static int write_DBCR1(struct target *target, uint32_t data)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	ret = write_cpu_reg(target, &DBCR1_data, &data);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fs->DBCR1 = data;
+
+	return ERROR_OK;
+}
+
+static int write_DBCR2(struct target *target, uint32_t data)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	ret = write_cpu_reg(target, &DBCR2_data, &data);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fs->DBCR2 = data;
+
+	return ERROR_OK;
+}
+
+static int read_DBSR(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+	uint32_t data;
+
+	ret = read_cpu_reg(target, &DBSR_data, &data);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fs->DBSR = data;
+
+	return ERROR_OK;
+}
+
+static int clear_DBSR(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_RSDBSR_MASK);
+	if (ret != ERROR_OK)
+		return ret;
+	
+	ppc476fs->DBSR = 0;
+
+	return ERROR_OK;
 }
 
 static int ppc476fs_get_reg(struct reg *reg)
@@ -606,8 +921,8 @@ static void build_reg_caches(struct target *target)
 
 		reg->name = reg_data->name;
 		reg->number = i;
-		//reg->feature = calloc(1, sizeof(struct reg_feature)); // ???
-		//reg->feature->name = "test"; // ???
+		reg->feature = calloc(1, sizeof(struct reg_feature));
+		reg->feature->name = reg_data->feature;
 		reg->caller_save = true; // gdb defaults to true
 		reg->exist = true;
 		storage_size = DIV_ROUND_UP(reg_data->bit_size, 8);
@@ -716,9 +1031,33 @@ static int ppc476fs_poll(struct target *target)
 	if ((prev_state != TARGET_HALTED) && (target->state == TARGET_HALTED)) {
 		ret = load_general_regs(target);
 		if (ret != ERROR_OK) {
-			LOG_ERROR("cannot load general cpu registers");
+			LOG_ERROR("cannot load general cpu registers"); // ???
 			return ret;
 		}
+
+		// ???
+		ppc476fs->JDCR |= JDCR_STO_MASK; // ????
+
+		ret = read_DBSR(target);
+		if (ret != ERROR_OK)
+			return ret;
+
+		printf("*** DBSR = 0x%08X\n", ppc476fs->DBSR); // ???
+
+		if (ppc476fs->DBSR != 0) {
+			if ((ppc476fs->DBSR & DBSR_IAC_ALL_MASK) != 0)
+				target->debug_reason = DBG_REASON_BREAKPOINT;
+			else if ((ppc476fs->DBSR & DBSR_DAC_ALL_MASK) != 0)
+				target->debug_reason = DBG_REASON_WATCHPOINT;
+			ret = clear_DBSR(target);
+			if (ret != ERROR_OK)
+				return ret;
+
+			// ???
+			ret = read_DBSR(target);
+			printf("*** DBSR test = 0x%08X\n", ppc476fs->DBSR); // ???
+		}
+
 		if (prev_state == TARGET_DEBUG_RUNNING)
 			target_call_event_callbacks(target, TARGET_EVENT_DEBUG_HALTED);
 		else
@@ -734,7 +1073,7 @@ int ppc476fs_arch_state(struct target *target)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	uint32_t IAR_value;
 
-	buf_cpy(find_reg_by_name(target, "IAR")->value, &IAR_value, 32);
+	buf_cpy(find_reg_by_name(target, "PC")->value, &IAR_value, 32);
 
 	LOG_USER("target halted due to %s, IAR: 0x%08X",
 		debug_reason_name(target),
@@ -750,6 +1089,114 @@ int ppc476fs_arch_state(struct target *target)
 		mips_isa_strings[mips32->isa_mode],
 		debug_reason_name(target),
 		buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));*/
+
+	return ERROR_OK;
+}
+
+static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+	int ret;
+	size_t iac_index = 0;
+	uint32_t iac_mask;
+
+	assert(breakpoint->set != 0);
+
+	printf("*** unset break\n"); // ???
+
+	iac_mask = (DBCR0_IAC1_MASK >> breakpoint->linked_BRP);
+	ret = write_DBCR0(target, ppc476fs->DBCR0 & ~iac_mask);
+	if (ret != ERROR_OK)
+		return ret;
+
+	breakpoint->set = 0;
+
+	return ERROR_OK;
+}
+
+static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
+	int ret;
+	int iac_index = 0;
+	uint32_t iac_mask;
+
+	assert(breakpoint->set == 0);
+
+	while (true) {
+		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
+		if ((ppc476fs->DBCR0 & iac_mask) == 0)
+			break;
+		++iac_index;
+	}
+	assert(iac_index < 4);
+
+	printf("*** index = %i, mask = 0x%08X\n", iac_index, iac_mask); // ???
+
+	breakpoint->linked_BRP = iac_index;
+
+	printf("*** address = 0x%08X\n", breakpoint->address); // ???
+	ret = write_cpu_reg(target, &IACx_data[iac_index], &breakpoint->address);
+	if (ret != ERROR_OK)
+		return ret;
+	
+	{ // ????
+		uint32_t test;
+		ret = read_cpu_reg(target, &IACx_data[iac_index], &test);
+		printf("*** test = 0x%08X\n", test); // ???
+	}
+
+	ret = write_DBCR0(target, ppc476fs->DBCR0 | iac_mask); // ????
+	if (ret != ERROR_OK)
+		return ret;
+
+	{ // ????
+		uint32_t test;
+		ret = read_cpu_reg(target, &DBCR0_data, &test);
+		printf("*** test2 = 0x%08X, 0x%08X\n", test, ppc476fs->DBCR0); // ???
+	}
+
+	breakpoint->set = 1;
+
+	printf("*** setok\n"); // ???
+
+	return ERROR_OK;
+}
+
+/* ??? static int disable_breakpoints(struct target *target)
+{
+	struct breakpoint *bp = target->breakpoints;
+	int ret;
+
+	printf("*** disable"); // ???
+
+	while (bp != NULL) {
+		if (bp->set != 0) {
+			ret = unset_breakpoint(target, bp);
+			if (ret != ERROR_OK)
+				return ret;
+		}
+		bp = bp->next;
+	}
+
+	return ERROR_OK;
+}*/
+
+static int enable_breakpoints(struct target *target)
+{
+	struct breakpoint *bp = target->breakpoints;
+	int ret;
+
+	printf("*** enable"); // ???
+
+	while (bp != NULL) {
+		if (bp->set == 0) {
+			ret = set_breakpoint(target, bp);
+			if (ret != ERROR_OK)
+				return ret;
+		}
+		bp = bp->next;
+	}
 
 	return ERROR_OK;
 }
@@ -785,7 +1232,7 @@ static int ppc476fs_halt(struct target *target)
 	// ???
 
 	/* break processor ??? */
-	ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_STO_MASK | JDCR_FT_MASK /*| JDCR_DWS_MASK*/); // ??? JDCR_FT_MASK JDCR_DWS_MASK
+	ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_STO_MASK /*| JDCR_FT_MASK | JDCR_DWS_MASK*/); // ??? JDCR_FT_MASK JDCR_DWS_MASK
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot set JDCR register"); // ??? many dup
 		return ret;
@@ -801,20 +1248,16 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
 	int ret;
 
+	printf("*** resume\n"); // ???
+
 	if (target->state != TARGET_HALTED) {
 		LOG_WARNING("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	// ??? if (!debug_execution) {
-		// ??? target_free_all_working_areas(target);
-		// ??? mips_m4k_enable_breakpoints(target);
-		// ??? mips_m4k_enable_watchpoints(target);
-	// ??? }
-
 	// current = 1: continue on current pc, otherwise continue at <address>
 	if (!current) {
-		struct reg *IAR = find_reg_by_name(target, "IAR");
+		struct reg *IAR = find_reg_by_name(target, "PC");
 		ret = IAR->type->set(IAR, (void*)&address);
 		if (ret != ERROR_OK) {
 			LOG_ERROR("cannot set IAR register");
@@ -828,29 +1271,15 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 		return ret;
 	}
 
-	// ??? mips32_restore_context(target);
+	printf("*** resume 2\n"); // ???
 
-	/* the front-end may request us not to handle breakpoints */
-	// ??? if (handle_breakpoints) {
-		/* Single step past breakpoint at current address */
-		/* ??? breakpoint = breakpoint_find(target, resume_pc);
-		if (breakpoint) {
-			LOG_DEBUG("unset breakpoint at 0x%8.8" PRIx32 "", breakpoint->address);
-			mips_m4k_unset_breakpoint(target, breakpoint);
-			mips_m4k_single_step_core(target);
-			mips_m4k_set_breakpoint(target, breakpoint);
-		}
-	}*/
+	ret = enable_breakpoints(target);
+	if (ret != ERROR_OK)
+		return ret;
 
-	/* enable interrupts if we are running */
-	// ??? mips32_enable_interrupts(target, !debug_execution);
+	printf("*** resume 3\n"); // ???
 
-	/* exit debug mode */
-	// ??? mips_ejtag_exit_debug(ejtag_info);
 	target->debug_reason = DBG_REASON_NOTHALTED;
-
-	/* registers are now invalid */
-	// ??? register_cache_invalidate(mips32->core_cache);
 
 	ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR & ~JDCR_STO_MASK);
 	if (ret != ERROR_OK) {
@@ -860,14 +1289,13 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 
 	clear_regs_status(target);
 
-	if (!debug_execution) {
-		target->state = TARGET_RUNNING;
-		// ??? target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-		// ??? LOG_DEBUG("target resumed at 0x%" PRIx32 "", resume_pc);
-	} else {
+	if (debug_execution) {
 		target->state = TARGET_DEBUG_RUNNING;
-		// ??? target_call_event_callbacks(target, TARGET_EVENT_DEBUG_RESUMED);
-		// ??? LOG_DEBUG("target debug resumed at 0x%" PRIx32 "", resume_pc);
+		target_call_event_callbacks(target, TARGET_EVENT_DEBUG_RESUMED);
+	}
+	else {
+		target->state = TARGET_RUNNING;
+		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 	}
 
 	return ERROR_OK;
@@ -887,7 +1315,7 @@ static int ppc476fs_step(struct target *target, int current, uint32_t address, i
 
 	// current = 1: continue on current pc, otherwise continue at <address>
 	if (!current) {
-		struct reg *IAR = find_reg_by_name(target, "IAR");
+		struct reg *IAR = find_reg_by_name(target, "PC");
 		ret = IAR->type->set(IAR, (void*)&address);
 		if (ret != ERROR_OK) {
 			LOG_ERROR("cannot set IAR register");
@@ -904,20 +1332,19 @@ static int ppc476fs_step(struct target *target, int current, uint32_t address, i
 	// 		mips_m4k_unset_breakpoint(target, breakpoint);
 	// }
 
-	/* restore context */
-	// ??? mips32_restore_context(target);
 	ret = write_dirty_regs(target);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot write dirty cpu registers"); // ???
 		return ret;
 	}
 
-	/* configure single step mode */
-	// ??? mips_ejtag_config_step(ejtag_info, 1);
+	ret = enable_breakpoints(target);
+	if (ret != ERROR_OK)
+		return ret;
 
 	target->debug_reason = DBG_REASON_SINGLESTEP;
 
-	ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_STO_MASK | JDCR_FT_MASK | JDCR_SS_MASK);
+	ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_SS_MASK);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot set JDCR register");
 		return ret;
@@ -927,6 +1354,31 @@ static int ppc476fs_step(struct target *target, int current, uint32_t address, i
 
 	target->state = TARGET_RUNNING;
    	target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
+
+	return ERROR_OK;
+}
+
+static int to_halt_state(struct target *target)
+{
+	int ret;
+
+	ret = ppc476fs_poll(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if (target->state == TARGET_HALTED)
+		return ERROR_OK;
+
+	ret = ppc476fs_halt(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = ppc476fs_poll(target);
+	if (ret != ERROR_OK)
+		return ret;
+	
+	if (target->state != TARGET_HALTED)
+		return ERROR_FAIL;
 
 	return ERROR_OK;
 }
@@ -1154,6 +1606,64 @@ static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32
 	return main_ret;
 }
 
+static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	struct breakpoint *bp;
+	int ret, bp_count;
+
+	if (breakpoint->type != BKPT_HARD)
+		return ERROR_TARGET_FAILURE; // only hardware points
+	
+	printf("*** length = %i \n", breakpoint->length); // ???
+	if (breakpoint->length != 4)
+		return ERROR_TARGET_UNALIGNED_ACCESS;
+
+	bp = target->breakpoints;
+	bp_count = 0;
+	while (bp != NULL) {
+		++bp_count;
+		bp = bp->next;
+	}
+	if (bp_count == 4)
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+
+	ret = to_halt_state(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	breakpoint->set = 0;
+
+	printf("*** ok 1\n"); // ???
+
+	return ERROR_OK;
+}
+
+static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	int ret;
+
+	if (breakpoint->set == 0)
+		return ERROR_OK;
+
+	ret = to_halt_state(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return unset_breakpoint(target, breakpoint);
+}
+
+static int ppc476fs_add_watchpoint(struct target *target, struct watchpoint *watchpoint)
+{
+	return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+}
+
+static int ppc476fs_remove_watchpoint(struct target *target, struct watchpoint *watchpoint)
+{
+	assert(false);
+
+	return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+}
+
 static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 {
 	struct ppc476fs_common *ppc476fs = calloc(1, sizeof(struct ppc476fs_common));
@@ -1176,9 +1686,38 @@ static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *
 
 static int ppc476fs_examine(struct target *target)
 {
-	//
-	// ????
-	//
+	struct breakpoint *bp;
+	int ret;
+	uint32_t value;
+
+	// ??? ppc476fs->JDCR = 0; // ????	
+	ret = to_halt_state(target); // ??? name
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = write_DBCR1(target, 0);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = write_DBCR2(target, 0);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = clear_DBSR(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// clear breakpoints status
+	bp = target->breakpoints;
+	while (bp != NULL) {
+		bp->set = 0;
+		bp = bp->next;
+	}
+
    	target_set_examined(target);
 
 	return ERROR_OK;
@@ -1239,15 +1778,11 @@ struct target_type ppc476fs_target = {
 
 	.read_memory = ppc476fs_read_memory,
 	.write_memory = ppc476fs_write_memory,
-	// .checksum_memory = mips32_checksum_memory,
-	// .blank_check_memory = mips32_blank_check_memory,
 
-	// .run_algorithm = mips32_run_algorithm,
-
-	// .add_breakpoint = mips_m4k_add_breakpoint,
-	// .remove_breakpoint = mips_m4k_remove_breakpoint,
-	// .add_watchpoint = mips_m4k_add_watchpoint,
-	// .remove_watchpoint = mips_m4k_remove_watchpoint,
+	.add_breakpoint = ppc476fs_add_breakpoint,
+	.remove_breakpoint = ppc476fs_remove_breakpoint,
+	.add_watchpoint = ppc476fs_add_watchpoint,
+	.remove_watchpoint = ppc476fs_remove_watchpoint,
 
 	.commands = ppc476fs_command_handlers,
 	.target_create = ppc476fs_target_create,
