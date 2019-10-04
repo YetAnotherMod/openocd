@@ -2,28 +2,18 @@
 #include "config.h"
 #endif
 
-#include <helper/log.h> // ???
-#include <jtag/jtag.h> // ???
-#include "target.h"
-#include "target_type.h"
-#include "register.h"
-#include "breakpoints.h"
+#include <jtag/jtag.h>
+#include <target/target.h>
+#include <target/target_type.h>
+#include <target/register.h>
+#include <target/breakpoints.h>
+#include <helper/log.h>
 
-// ??? #define JDSR_PSP_MASK (1 << 31)
 #define JDSR_PSP_MASK (1 << (31 - 31))
 
-// ???
-// #define JDCR_STO_MASK (1 << 0)
-// #define JDCR_SS_MASK (1 << 2)
-// #define JDCR_FT_MASK (1 << 6) /* ??? */
-// #define JDCR_RSDBSR_MASK (1 << 8)
-// #define JDCR_DWS_MASK (1 << 9) /* ??? */
 #define JDCR_STO_MASK (1 << (31 - 0))
 #define JDCR_SS_MASK (1 << (31 - 2))
-// ??? #define JDCR_FT_MASK (1 << 6) /* ??? */
 #define JDCR_RSDBSR_MASK (1 << (31 - 8))
-// ??? #define JDCR_DWS_MASK (1 << 9) /* ??? */
-
 
 #define DBCR0_EDM_MASK (1 << (63 - 32))
 #define DBCR0_IAC1_MASK (1 << (63 - 40))
@@ -40,17 +30,10 @@
 #define DBSR_IAC_ALL_MASK (DBSR_IAC1_MASK | DBSR_IAC2_MASK | DBSR_IAC3_MASK | DBSR_IAC4_MASK)
 #define DBSR_DAC_ALL_MASK (DBSR_DAC1R_MASK | DBSR_DAC1W_MASK | DBSR_DAC2R_MASK | DBSR_DAC2W_MASK)
 
-#define MSR_FP_MASK (1 << (63 - 50)) /* ??? */
+#define MSR_FP_MASK (1 << (63 - 50))
 
 struct ppc476fs_common {
-	//uint32_t JDSR; // ???
-	//uint32_t JDCR; // ????
-	//uint32_t JISB; // ????
-	//uint32_t DBDR; // ????
-	uint32_t DBCR0; // ???
-	uint32_t DBCR1; // ???
-	uint32_t DBCR2; // ???
-	// ??? uint32_t DBSR; // ???
+	uint32_t DBCR0_value;
 };
 
 enum ppc476fs_reg_arch_type
@@ -203,7 +186,7 @@ static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
 
 // ??? ===============================================================================
 
-static int new_jtag_read_write_register(struct target *target, uint32_t instr, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
+static int jtag_read_write_register(struct target *target, uint32_t instr, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
 {
 	struct scan_field field;
 	struct scan_field fields[2];
@@ -240,40 +223,60 @@ static int new_jtag_read_write_register(struct target *target, uint32_t instr, u
 	return ERROR_OK;
 }
 
-static int new_read_JDSR(struct target *target, uint32_t *data)
+static int read_JDSR(struct target *target, uint32_t *data)
 {
-	return new_jtag_read_write_register(target, 0x2C, 0, 0, data); // 0b0101100
+	return jtag_read_write_register(target, 0x2C, 0, 0, data); // 0b0101100
 }
 
-static int new_write_JDCR(struct target *target, uint32_t data)
+static int write_JDCR(struct target *target, uint32_t data)
 {
-	return new_jtag_read_write_register(target, 0x2C, 1, data, NULL); // 0b0101100
+	int ret;
+
+	ret = jtag_read_write_register(target, 0x2C, 1, data, NULL); // 0b0101100
+	if (ret != ERROR_OK)
+		return ret;
+
+	// !!! IMPORTANT
+	// make additional write_JDCR/read_JDSR request with valid bit == 0
+	// to correct a JTAG communication BUG
+	return jtag_read_write_register(target, 0x2C, 0, 0, NULL); // 0b0101100
 }
 
-static int new_stuff_code(struct target *target, uint32_t code)
+static int stuff_code(struct target *target, uint32_t code)
 {
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
 
-	ret =  new_jtag_read_write_register(target, 0x3C, 1, code, NULL); // 0b0111100
+	ret =  jtag_read_write_register(target, 0x3C, 1, code, NULL); // 0b0111100
 	if (ret != ERROR_OK)
 		return ret;
 
 	// !!! IMPORTANT
 	// make additional write_JISB/read_JDSR request with valid bit == 0
 	// to correct a JTAG communication BUG
-	return new_jtag_read_write_register(target, 0x3C, 0, 0, NULL); // 0b0111100
+	return jtag_read_write_register(target, 0x3C, 0, 0, NULL); // 0b0111100
 }
 
-static int new_read_DBDR(struct target *target, uint32_t *data)
+static int read_DBDR(struct target *target, uint32_t *data)
 {
-	return new_jtag_read_write_register(target, 0x5C, 0, 0, data); // 0b1011100
+	return jtag_read_write_register(target, 0x5C, 0, 0, data); // 0b1011100
 }
 
-static int new_write_DBDR(struct target *target, uint32_t data)
+static int write_DBDR(struct target *target, uint32_t data)
 {
-	return new_jtag_read_write_register(target, 0x5C, 1, data, NULL); // 0b1011100
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	ret = jtag_read_write_register(target, 0x5C, 1, data, NULL); // 0b1011100
+	if (ret != ERROR_OK)
+		return ret;
+
+	// !!! IMPORTANT
+	// make additional write_DBDR/read_DBDR request with valid bit == 0
+	// to correct a JTAG communication BUG
+	return jtag_read_write_register(target, 0x5C, 0, 0, NULL); // 0b1011100
 }
 
 
@@ -303,187 +306,44 @@ static struct reg *find_reg_by_name(struct target *target, const char *reg_name)
 	return NULL;
 }
 
-// ??? delete
-/* static void jtag_select_instr(struct target *target, uint32_t instr)
-{
-	struct scan_field field;
-	uint8_t buffer[4];
-
-	buf_set_u32(buffer, 0, target->tap->ir_length, instr);
-	field.num_bits = target->tap->ir_length;
-	field.out_value = buffer;
-	field.in_value = NULL;
-
-	jtag_add_ir_scan(target->tap, &field, TAP_IDLE);
-}*/
-
-// ??? delete
-/* ??? static int jtag_read_write_register_32(struct target *target, uint32_t instr, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
-{
-	struct scan_field fields[2];
-	uint8_t data_out_buffer[4];
-	uint8_t data_in_buffer[4];
-	uint8_t valid_buffer[4];
-	int ret;
-
-	jtag_select_instr(target, instr);
-
-	buf_set_u32(data_out_buffer, 0, 32, flip_u32(write_data, 32));
-	fields[0].num_bits = 32;
-	fields[0].out_value = data_out_buffer;
-	fields[0].in_value = data_in_buffer;
-
-	buf_set_u32(valid_buffer, 0, 1, valid_bit);
-	fields[1].num_bits = 1;
-	fields[1].out_value = valid_buffer;
-	fields[1].in_value = NULL;
-
-	jtag_add_dr_scan(target->tap, 2, fields, TAP_IDLE);
-	ret = jtag_execute_queue();
-	if (ret != ERROR_OK)
-		return ret;
-
-	if (read_data != NULL)
-		*read_data = flip_u32(buf_get_u32(data_in_buffer, 0, 32), 32);
-
-	return ERROR_OK;
-}*/
-
-// ??? delete
-/* ??? int read_JDSR(struct target *target)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-
-	uint32_t read_data;
-	int ret = jtag_read_write_register_32(target, 0x2C, 0, 0, &read_data); // 0b0101100
-
-	if (ret == ERROR_OK)
-		ppc476fs->JDSR = read_data;
-
-	return ret;
-}*/
-
-// ??? delete
-/* ??? int write_JDCR_read_JDSR(struct target *target, uint32_t write_data)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-
-	uint32_t read_data;
-	int ret = jtag_read_write_register_32(target, 0x2C, 1, write_data, &read_data); // 0b0101100 ???
-
-	if (ret == ERROR_OK) {
-		ppc476fs->JDSR = read_data;
-		ppc476fs->JDCR = write_data & ~JDCR_SS_MASK & ~JDCR_RSDBSR_MASK; // ????
-	}
-
-	return ret;
-}*/
-
-// ??? delete
-/* ???int write_JISB_read_JDSR(struct target *target, uint32_t write_data)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-
-	uint32_t read_data;
-	int ret = jtag_read_write_register_32(target, 0x3C, 1, write_data, &read_data); // 0b0111100 ???
-	if (ret == ERROR_OK) {
-		ret = jtag_read_write_register_32(target, 0x3C, 0, 0, NULL); // 0b0111100 ??? !!! JTAG communication BUG
-		if (ret == ERROR_OK) {
-			ppc476fs->JDSR = read_data;
-			ppc476fs->JISB = write_data;
-		}
-	}
-
-	return ret;
-}*/
-
-// ??? delete
-/* ??? int read_DBDR(struct target *target)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-
-	uint32_t read_data;
-	int ret = jtag_read_write_register_32(target, 0x5C, 0, 0, &read_data); // 0b1011100 ???
-
-	if (ret == ERROR_OK)
-		ppc476fs->DBDR = read_data;
-
-	return ret;
-}*/
-
-// ??? delete
-/* ???? int write_DBDR(struct target *target, uint32_t write_data)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-
-	int ret = jtag_read_write_register_32(target, 0x5C, 1, write_data, NULL); // 0b1011100 ???
-
-	if (ret == ERROR_OK)
-		ppc476fs->DBDR = write_data;
-
-	return ret;
-}*/
-
-// ??? delete
-/* ??? static int stuff_code(struct target *target, uint32_t code)
-{
-	int ret = write_JISB_read_JDSR(target, flip_u32(code, 32)); // ??? flip
-	if (ret != ERROR_OK)
-		LOG_ERROR("cannot stuff instruction");
-	return ret;
-}*/
-
+// ??? inline
 static int read_reg_by_code(struct target *target, uint32_t code, void *data) // ??? name
 {
-	// ??? struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
-	// ??? uint32_t buf;
 
 	assert(target->state == TARGET_HALTED);
 
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 
-	return new_read_DBDR(target, data);
-	// ???
-	// if (ret != ERROR_OK) {
-	// 	LOG_ERROR("cannot read DBDR register"); // ??? dup
-	// 	return ret;
-	// }
-
-	// buf = flip_u32(ppc476fs->DBDR, 32); // ???
-	// buf_cpy(&buf, data, 32);
-
-	// return ERROR_OK;
+	return read_DBDR(target, data);
 }
 
+// ??? inline
 static int write_reg_by_code(struct target *target, uint32_t code, uint32_t data) // ??? name
 {
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
 
-	ret = new_write_DBDR(target, data);
+	ret = write_DBDR(target, data);
 	if (ret != ERROR_OK)
 		return ret;
 
-	return new_stuff_code(target, code);
+	return stuff_code(target, code);
 }
 
 static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *reg_data, void *data);
 static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *reg_data, const void *data);
 
-// MSR, R1(SP), R2 are already saved, and R1(SP) is correct aligned
-static int read_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_value, uint32_t reg_number, void *data)
+// MSR, R1(SP), R2 are already saved, and R1(SP) is correct aligned // ???? about R1
+static int read_fpu_reg(struct target *target, uint32_t msr_value, uint32_t reg_number, void *data)
 {
-	const struct ppc476fs_reg_info *temp_reg_data_1 = &reg_info[find_reg_by_name(target, "R1")->number]; // ??? name
 	const struct ppc476fs_reg_info *temp_reg_data_2 = &reg_info[find_reg_by_name(target, "R2")->number]; // ??? name
 	const struct ppc476fs_reg_info *temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number]; // ??? name
 	uint32_t code, value, value_high, value_low;
 	int ret;
-
-	printf("R1 = 0x%08X\n", r1_value); // ???
 
 	// ??? restore memory area
 
@@ -494,41 +354,31 @@ static int read_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_v
 	ret = write_cpu_reg(target, temp_reg_data_2, &value); // ???
 	if (ret != ERROR_OK)
 		return ret;
-
-	value = 0; /// ???
-	read_cpu_reg(target, temp_reg_data_2, &value);
-	printf("R2 test = 0x%08X\n", value); // ???
-
 	code = 0x9041FFF8; // stw R2, -8(R1)
-	// ??? ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	value = 0x014CFA38;
 	ret = write_cpu_reg(target, temp_reg_data_2, &value); // ???
 	if (ret != ERROR_OK)
 		return ret;
-
-	value = 0; /// ???
-	read_cpu_reg(target, temp_reg_data_2, &value);
-	printf("R2 test = 0x%08X\n", value); // ???
-
 	code = 0x9041FFFC; // stw R2, -4(R1)
-	// ???? ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 
-/* ???	value = msr_value | MSR_FP_MASK; // ???
+	value = msr_value | MSR_FP_MASK; // ???
 	ret = write_cpu_reg(target, temp_reg_data_3, &value); // ???
 	if (ret != ERROR_OK)
 		return ret;
 
 	code = 0xD801FFF8 | (reg_number << 21); // stfd Fx, -8(r1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
-		return ret;*/
+		return ret;
 
 	code = 0x8041FFF8; // lwz R2, -8(R1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	ret  = read_cpu_reg(target, temp_reg_data_2, &value_high);
@@ -536,7 +386,7 @@ static int read_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_v
 		return ret;
 
 	code = 0x8041FFFC; // lwz R2, -4(R1)
-	//???ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	ret  = read_cpu_reg(target, temp_reg_data_2, &value_low);
@@ -546,11 +396,8 @@ static int read_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_v
 	if ((value_high == 0x83AFC410) && (value_low == 0x014CFA38)) // ??? const
 		return ERROR_FAIL;
 
-	// ??? value_low = htonl(value_low); // ???
-	// ??? value_high = htonl(value_high); // ???
-
-	//memcpy(data, &value_high, 4); // ???
-	//memcpy(data + 4, &value_low, 4); // ???*/
+	memcpy(data, &value_high, 4);
+	memcpy(data + 4, &value_low, 4);
 
 	return ERROR_OK;
 }
@@ -588,20 +435,20 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		ret = read_cpu_reg(target, temp_reg_data_2, &save_value_2); // save R2
 		if (ret != ERROR_OK)
 			break;
-// ???		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
+		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
 		if (ret != ERROR_OK)
 		 	break;
-		main_ret = read_fpu_reg(target, save_value_3, save_value, reg_data->reg_arch_opcode, data); // ???
-		// ???
-//???		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
+		main_ret = read_fpu_reg(target, save_value_3, reg_data->reg_arch_opcode, data);
+		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
 		if (main_ret == ERROR_OK) // ???
 		 	main_ret = ret;
 		ret = write_cpu_reg(target, temp_reg_data_2, &save_value_2); // restore R2
 		if (main_ret == ERROR_OK) // ???
 			main_ret = ret;
-		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R1
-		if (main_ret == ERROR_OK) // ???
-			main_ret = ret;
+		// ??? not need
+		// ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R1
+		// if (main_ret == ERROR_OK) // ???
+		// 	main_ret = ret;
 		ret = main_ret;
 		break;
 	case PPC476FS_REG_TYPE_SPR:
@@ -610,7 +457,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		if (ret != ERROR_OK)
 			break;
 		code = 0x7FE002A6 | ((reg_data->reg_arch_opcode & 0x1F) << 16) | ((reg_data->reg_arch_opcode & 0x3E0) << (11 - 5)); // mfspr R31, spr
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = read_cpu_reg(target, temp_reg_data, data); // read R31
@@ -624,7 +471,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		if (ret != ERROR_OK)
 			break;
 		code = 0x48000001; // bl $+0
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = read_cpu_reg(target, temp_reg_data, &temp_value); // read LR (it will contain the current IAR + 4)
@@ -640,7 +487,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		if (ret != ERROR_OK)
 			break;
 		code = 0x7FE000A6; // mfmsr R31
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = read_cpu_reg(target, temp_reg_data, data); // read R31
@@ -654,7 +501,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		if (ret != ERROR_OK)
 			break;
 		code = 0x7FE00026; // mfcr R31
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = read_cpu_reg(target, temp_reg_data, data); // read R31
@@ -676,7 +523,7 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 		if (ret != ERROR_OK)
 			return ret;
 		code = 0xFC00048E; // mffs F0
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = read_cpu_reg(target, temp_reg_data, &temp_value_64); // read F0
@@ -695,10 +542,9 @@ static int read_cpu_reg(struct target *target, const struct ppc476fs_reg_info *r
 	return ret;
 }
 
-// MSR, R1(SP), R2 are already saved, and R1(SP) is correct aligned
-static int write_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_value, uint32_t reg_number, const void *data)
+// MSR, R1(SP), R2 are already saved, and R1(SP) is correct aligned ??? about R1
+static int write_fpu_reg(struct target *target, uint32_t msr_value, uint32_t reg_number, const void *data)
 {
-	const struct ppc476fs_reg_info *temp_reg_data_1 = &reg_info[find_reg_by_name(target, "R1")->number]; // ??? name
 	const struct ppc476fs_reg_info *temp_reg_data_2 = &reg_info[find_reg_by_name(target, "R2")->number]; // ??? name
 	const struct ppc476fs_reg_info *temp_reg_data_3 = &reg_info[find_reg_by_name(target, "MSR")->number]; // ??? name
 	uint32_t code, value, value_high, value_low;
@@ -714,11 +560,11 @@ static int write_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_
 	if (ret != ERROR_OK)
 		return ret;
 	code = 0x9041FFF8; // stw R2, -8(R1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	code = 0x8041FFF8; // lfw R2, -8(R1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	ret  = read_cpu_reg(target, temp_reg_data_2, &value);
@@ -733,11 +579,11 @@ static int write_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_
 	if (ret != ERROR_OK)
 		return ret;
 	code = 0x9041FFFC; // stw R2, -4(R1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	code = 0x8041FFFC; // lfw R2, -4(R1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 	ret  = read_cpu_reg(target, temp_reg_data_2, &value);
@@ -752,7 +598,7 @@ static int write_fpu_reg(struct target *target, uint32_t msr_value, uint32_t r1_
 		return ret;
 
 	code = 0xC801FFF8 | (reg_number << 21); // lfd Fx, -8(R1)
-	ret = new_stuff_code(target, code);
+	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -773,7 +619,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 
 	assert(target->state == TARGET_HALTED);
 
-	printf("*** write %s 0x%08X\n", reg_data->name, *((uint32_t*)data)); // ???
+	// /?? printf("*** write %s 0x%08X\n", reg_data->name, *((uint32_t*)data)); // ???
 
 	switch (reg_data->reg_arch_type) {
 	case PPC476FS_REG_TYPE_GPR:
@@ -796,16 +642,17 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		ret = read_cpu_reg(target, temp_reg_data_3, &save_value_3); // save MSR
 		if (ret != ERROR_OK)
 			break;
-		main_ret = write_fpu_reg(target, save_value_3, save_value, reg_data->reg_arch_opcode, data); // ???
+		main_ret = write_fpu_reg(target, save_value_3, reg_data->reg_arch_opcode, data); // ???
 		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
 		if (main_ret == ERROR_OK) // ???
 		 	main_ret = ret;
 		ret = write_cpu_reg(target, temp_reg_data_2, &save_value_2); // restore R2
 		if (main_ret == ERROR_OK) // ???
 			main_ret = ret;
-		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R1
-		if (main_ret == ERROR_OK) // ???
-			main_ret = ret;
+		// ??? not need
+		// ??? ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R1
+		// ??? if (main_ret == ERROR_OK) // ???
+			// ??? main_ret = ret;
 		ret = main_ret;
 		break;
 	case PPC476FS_REG_TYPE_SPR:
@@ -817,7 +664,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		if (ret != ERROR_OK)
 			break;
 		code = 0x7FE003A6 | ((reg_data->reg_arch_opcode & 0x1F) << 16) | ((reg_data->reg_arch_opcode & 0x3E0) << (11 - 5)); // mtspr spr, R31
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
@@ -831,7 +678,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		if (ret != ERROR_OK)
 			break;
 		code = 0x4E800020; // blr
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore LR
@@ -845,7 +692,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		if (ret != ERROR_OK)
 			break;
 		code = 0x7FE00124; // mtmsr R31
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
@@ -859,7 +706,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		if (ret != ERROR_OK)
 			break;
 		code = 0x7FEFF120; // mtcr R31
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = write_cpu_reg(target, temp_reg_data, &save_value); // restore R31
@@ -883,7 +730,7 @@ static int write_cpu_reg(struct target *target, const struct ppc476fs_reg_info *
 		if (ret != ERROR_OK)
 			break;
 		code = 0xFDFE058E; // mtfsf 255, F0		              
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			break;
 		ret = write_cpu_reg(target, temp_reg_data_3, &save_value_3); // restore MSR ??? optimize
@@ -903,45 +750,15 @@ static int write_DBCR0(struct target *target, uint32_t data)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 
-	// ??? uint32_t buffer; // ????
-	// ??? buffer = flip_u32(data, 32);
-
 	ret = write_cpu_reg(target, &DBCR0_data, &data);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ppc476fs->DBCR0 = data;
+	ppc476fs->DBCR0_value = data;
 
 	return ERROR_OK;
 }
 
-static int write_DBCR1(struct target *target, uint32_t data)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	int ret;
-
-	ret = write_cpu_reg(target, &DBCR1_data, &data);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ppc476fs->DBCR1 = data;
-
-	return ERROR_OK;
-}
-
-static int write_DBCR2(struct target *target, uint32_t data)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	int ret;
-
-	ret = write_cpu_reg(target, &DBCR2_data, &data);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ppc476fs->DBCR2 = data;
-
-	return ERROR_OK;
-}
 
 // ??? optimize to read_cpu_reg
 static int read_DBSR(struct target *target, uint32_t *data)
@@ -963,7 +780,7 @@ static int clear_DBSR(struct target *target)
 {
 	assert(target->state == TARGET_HALTED);
 
-	return new_write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
+	return write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
 }
 
 static int ppc476fs_get_reg(struct reg *reg)
@@ -1078,8 +895,7 @@ static int load_general_regs(struct target *target)
 	clear_regs_status(target);
 
 	while (cache != NULL) {
-		// ??? for (i = 0; i < cache->num_regs; ++i) {
-		for (i = 0; i < 32; ++i) {
+		for (i = 0; i < cache->num_regs; ++i) {
 			reg_data = &reg_info[cache->reg_list[i].number];
 			ret = read_cpu_reg(target, reg_data, cache->reg_list[i].value);
 			if (ret != ERROR_OK) {
@@ -1131,7 +947,7 @@ static int ppc476fs_poll(struct target *target)
 	uint32_t jdsr_value, jbsr_value;
 	int ret;
 
-	ret = new_read_JDSR(target, &jdsr_value);
+	ret = read_JDSR(target, &jdsr_value);
 	if (ret != ERROR_OK) {
 		target->state = TARGET_UNKNOWN;
 		return ret;
@@ -1156,7 +972,7 @@ static int ppc476fs_poll(struct target *target)
 		if (ret != ERROR_OK)
 			return ret;
 
-		// ??? printf("*** DBSR = 0x%08X\n", ppc476fs->DBSR); // ???
+		printf("*** DBSR = 0x%08X\n", jbsr_value); // ???
 
 		if (jbsr_value != 0) {
 			if ((jbsr_value & DBSR_IAC_ALL_MASK) != 0)
@@ -1192,17 +1008,6 @@ int ppc476fs_arch_state(struct target *target)
 	LOG_USER("target halted due to %s, IAR: 0x%08X",
 		debug_reason_name(target),
 		IAR_value);
-	/* ????LOG_USER("target halted in %s mode due to %s, pc: 0x%8.8" PRIx32 "",
-		mips_isa_strings[mips32->isa_mode],
-		debug_reason_name(target),
-		buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));*/
-
-		// ??? struct mips32_common *mips32 = target_to_mips32(target);
-
-	/* ??? LOG_USER("target halted in %s mode due to %s, pc: 0x%8.8" PRIx32 "",
-		mips_isa_strings[mips32->isa_mode],
-		debug_reason_name(target),
-		buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));*/
 
 	return ERROR_OK;
 }
@@ -1219,7 +1024,7 @@ static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint
 	printf("*** unset break\n"); // ???
 
 	iac_mask = (DBCR0_IAC1_MASK >> breakpoint->linked_BRP);
-	ret = write_DBCR0(target, ppc476fs->DBCR0 & ~iac_mask);
+	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~iac_mask);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1239,7 +1044,7 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 	while (true) {
 		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
-		if ((ppc476fs->DBCR0 & iac_mask) == 0)
+		if ((ppc476fs->DBCR0_value & iac_mask) == 0)
 			break;
 		++iac_index;
 	}
@@ -1260,14 +1065,14 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 		printf("*** test = 0x%08X\n", test); // ???
 	}
 
-	ret = write_DBCR0(target, ppc476fs->DBCR0 | iac_mask); // ????
+	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask); // ????
 	if (ret != ERROR_OK)
 		return ret;
 
 	{ // ????
 		uint32_t test;
 		ret = read_cpu_reg(target, &DBCR0_data, &test);
-		printf("*** test2 = 0x%08X, 0x%08X\n", test, ppc476fs->DBCR0); // ???
+		printf("*** test2 = 0x%08X, 0x%08X\n", test, ppc476fs->DBCR0_value); // ???
 	}
 
 	breakpoint->set = 1;
@@ -1284,7 +1089,7 @@ static int enable_breakpoints(struct target *target)
 
 	printf("*** enable"); // ???
 
-	/* ??? while (bp != NULL) {
+	while (bp != NULL) {
 		if (bp->set == 0) {
 			ret = set_breakpoint(target, bp);
 			if (ret != ERROR_OK)
@@ -1292,9 +1097,11 @@ static int enable_breakpoints(struct target *target)
 		}
 		bp = bp->next;
 	}
-*/
+
 	return ERROR_OK;
 }
+
+// ??? messages to main procedures
 
 static int ppc476fs_halt(struct target *target)
 {
@@ -1311,24 +1118,8 @@ static int ppc476fs_halt(struct target *target)
 	if (target->state == TARGET_UNKNOWN)
 		LOG_WARNING("target was in unknown state when halt was requested");
 
-	// if (target->state == TARGET_RESET) {
-	// 	if ((jtag_get_reset_config() & RESET_SRST_PULLS_TRST) && jtag_get_srst()) {
-	// 		LOG_ERROR("can't request a halt while in reset if nSRST pulls nTRST");
-	// 		return ERROR_TARGET_FAILURE;
-	// 	} else {
-	// 		/* we came here in a reset_halt or reset_init sequence
-	// 		 * debug entry was already prepared in mips_m4k_assert_reset()
-	// 		 */
-	// 		target->debug_reason = DBG_REASON_DBGRQ;
-
-	// 		return ERROR_OK;
-	// 	}
-	// }
-	// ???
-
 	/* break processor ??? */
-	// ??? ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_STO_MASK /*| JDCR_FT_MASK | JDCR_DWS_MASK*/); // ??? JDCR_FT_MASK JDCR_DWS_MASK
-	ret = new_write_JDCR(target, JDCR_STO_MASK /*| JDCR_FT_MASK | JDCR_DWS_MASK*/); // ??? JDCR_FT_MASK JDCR_DWS_MASK
+	ret = write_JDCR(target, JDCR_STO_MASK);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot set JDCR register"); // ??? many dup
 		return ret;
@@ -1377,7 +1168,7 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 
 	target->debug_reason = DBG_REASON_NOTHALTED;
 
-	ret = new_write_JDCR(target, 0); // ??? ppc476fs->JDCR & ~JDCR_STO_MASK);
+	ret = write_JDCR(target, 0); // ??? ppc476fs->JDCR & ~JDCR_STO_MASK);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot set JDCR register");
 		return ret;
@@ -1419,15 +1210,6 @@ static int ppc476fs_step(struct target *target, int current, uint32_t address, i
 		}
 	}
 
-	/* the front-end may request us not to handle breakpoints */
-	// ???
-	// if (handle_breakpoints) {
-	// 	breakpoint = breakpoint_find(target,
-	// 			buf_get_u32(mips32->core_cache->reg_list[MIPS32_PC].value, 0, 32));
-	// 	if (breakpoint)
-	// 		mips_m4k_unset_breakpoint(target, breakpoint);
-	// }
-
 	ret = write_dirty_regs(target);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot write dirty cpu registers"); // ???
@@ -1440,8 +1222,7 @@ static int ppc476fs_step(struct target *target, int current, uint32_t address, i
 
 	target->debug_reason = DBG_REASON_SINGLESTEP;
 
-	// ??? ret = write_JDCR_read_JDSR(target, ppc476fs->JDCR | JDCR_SS_MASK);
-	ret = new_write_JDCR(target, JDCR_STO_MASK | JDCR_SS_MASK);
+	ret = write_JDCR(target, JDCR_STO_MASK | JDCR_SS_MASK);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot set JDCR register");
 		return ret;
@@ -1538,7 +1319,7 @@ static int read_memory_internal(struct target *target, uint32_t address, uint32_
 		ret = write_cpu_reg(target, R1_reg_data, &address);
 		if (ret != ERROR_OK)
 			return ret;
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			return ret;
 		ret = read_cpu_reg(target, R0_reg_data, &value);
@@ -1646,7 +1427,7 @@ static int write_memory_internal(struct target *target, uint32_t address, uint32
 		ret = write_cpu_reg(target, R0_reg_data, &value);
 		if (ret != ERROR_OK)
 			return ret;
-		ret = new_stuff_code(target, code);
+		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			return ret;
 		address += size;
@@ -1766,11 +1547,6 @@ static int ppc476fs_remove_watchpoint(struct target *target, struct watchpoint *
 static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 {
 	struct ppc476fs_common *ppc476fs = calloc(1, sizeof(struct ppc476fs_common));
-
-	// ??? mips_m4k->common_magic = MIPSM4K_COMMON_MAGIC;
-
-	/* initialize mips4k specific info */
-	// ??? mips32_init_arch_info(target, mips32, tap);
 	target->arch_info = ppc476fs;
 
 	return ERROR_OK;
@@ -1789,26 +1565,27 @@ static int ppc476fs_examine(struct target *target)
 	int ret;
 	uint32_t value;
 
-	// ??? ppc476fs->JDCR = 0; // ????	
 	ret = to_halt_state(target); // ??? name
 	if (ret != ERROR_OK)
 		return ret;
 
-	/* ??? ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
+	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = write_DBCR1(target, 0);
+	value = 0;
+	ret = write_cpu_reg(target, &DBCR1_data, &value);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = write_DBCR2(target, 0);
+	value = 0;
+	ret = write_cpu_reg(target, &DBCR2_data, &value);
 	if (ret != ERROR_OK)
 		return ret;
 
 	ret = clear_DBSR(target);
 	if (ret != ERROR_OK)
-		return ret;*/
+		return ret;
 
 	// clear breakpoints status
 	bp = target->breakpoints;
@@ -1822,24 +1599,22 @@ static int ppc476fs_examine(struct target *target)
 	return ERROR_OK;
 }
 
-// ??? delete
 COMMAND_HANDLER(ppc476fs_handle_status_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	uint32_t JDSR_value = 0;
+	uint32_t JDSR_value;
 	int ret;
-	// ??? struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 
 	if (CMD_ARGC != 0)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	ret = new_read_JDSR(target, &JDSR_value);
+	ret = read_JDSR(target, &JDSR_value);
 	if (ret != ERROR_OK) {
 		command_print(CMD_CTX, "cannot read JDSR register");
 		return ret;
 	}
 
-	command_print(CMD_CTX, "PowerPC Status:");
+	command_print(CMD_CTX, "PowerPC JTAG status:");
 	command_print(CMD_CTX, "  JDSR = 0x%08X", JDSR_value);
 
 	return ERROR_OK;
