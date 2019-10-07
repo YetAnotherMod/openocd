@@ -231,6 +231,60 @@ static int write_spr_reg(struct target *target, int spr_num, uint32_t data)
 	return stuff_code(target, code);
 }
 
+static int test_memory_at_stack(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	uint32_t value_1;
+	uint32_t value_2;
+	int ret;
+
+	if (!ppc476fs->gpr_regs[1]->valid) // R1 must be valid (it is a stack pointer)
+		return ERROR_FAIL;
+	value_1 = get_reg_value_32(ppc476fs->gpr_regs[1]);
+	if ((value_1 < 8) || ((value_1 & 0x3) != 0)) // check the stack pointer
+		return ERROR_FAIL;
+
+	if (!ppc476fs->gpr_regs[2]->valid) // R2 must be valid
+		return ERROR_FAIL;
+
+	// set magic values to memory
+	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_1);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x9041FFF8); // stw R2, -8(R1)
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_2);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x9041FFFC); // stw R2, -4(R1)
+	if (ret != ERROR_OK)
+		return ret;
+
+	// read back the magic values
+	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
+	if (ret != ERROR_OK)
+		return ret;
+	ret  = read_gpr_reg(target, 2, &value_1);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
+	if (ret != ERROR_OK)
+		return ret;
+	ret  = read_gpr_reg(target, 2, &value_2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// check the magic values
+	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2)) {
+		if (!ppc476fs->gpr_regs[2]->dirty)
+			write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->gpr_regs[2])); // restore R2
+		return ERROR_FAIL;
+	}
+
+	return ERROR_OK;
+}
+
 static int read_required_gen_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -381,49 +435,9 @@ static int read_required_fpu_regs(struct target *target)
 		return ERROR_OK;
 	}
 
-	if (!ppc476fs->gpr_regs[1]->valid) // R1 must be valid (it is a stack pointer)
-		return ERROR_FAIL;
-	value_1 = get_reg_value_32(ppc476fs->gpr_regs[1]);
-	if ((value_1 < 8) || ((value_1 & 0x3) != 0)) // check the stack pointer
-		return ERROR_FAIL;
-
-	if (!ppc476fs->gpr_regs[2]->valid) // R2 must be valid
-		return ERROR_FAIL;
-
-	// set magic values to memory
-	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_1);
+	ret = test_memory_at_stack(target);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x9041FFF8); // stw R2, -8(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_2);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x9041FFFC); // stw R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-
-	// read back the magic values
-	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, &value_1);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, &value_2);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// check the magic values
-	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2)) {
-		if (!ppc476fs->gpr_regs[2]->dirty)
-			write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->gpr_regs[2])); // restore R2
-		return ERROR_FAIL;
-	}
 
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
 		reg = ppc476fs->fpr_regs[i];
@@ -506,7 +520,6 @@ int write_dirty_gen_regs(struct target *target)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
 	size_t i;
-	uint32_t code;
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
@@ -609,49 +622,9 @@ int write_dirty_fpu_regs(struct target *target)
 
 	assert((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) != 0);
 
-	if (!ppc476fs->gpr_regs[1]->valid) // R1 must be valid (it is a stack pointer)
-		return ERROR_FAIL;
-	value_1 = get_reg_value_32(ppc476fs->gpr_regs[1]);
-	if ((value_1 < 8) || ((value_1 & 0x3) != 0)) // check the stack pointer
-		return ERROR_FAIL;
-
-	if (!ppc476fs->gpr_regs[2]->valid) // R2 must be valid
-		return ERROR_FAIL;
-
-	// set magic values to memory
-	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_1);
+	ret = test_memory_at_stack(target);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x9041FFF8); // stw R2, -8(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_2);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x9041FFFC); // stw R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-
-	// read back the magic values
-	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, &value_1);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, &value_2);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// check the magic values
-	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2)) {
-		if (!ppc476fs->gpr_regs[2]->dirty)
-			write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->gpr_regs[2])); // restore R2
-		return ERROR_FAIL;
-	}
 
 	if (ppc476fs->FPSCR_reg->dirty) {
 		if (!ppc476fs->fpr_regs[0]->valid) {
@@ -730,7 +703,6 @@ int write_dirty_fpu_regs(struct target *target)
 static int write_DBCR0(struct target *target, uint32_t data)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	uint32_t R31_value;
 	int ret;
 
 	assert(ppc476fs->gpr_regs[31]->valid);
@@ -755,10 +727,8 @@ static int ppc476fs_get_gen_reg(struct reg *reg)
 {
 	struct target *target = reg->arch_info;
 
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted"); // ??? many dup
+	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
-	}
 
 	reg->valid = false;
 	reg->dirty = false;
@@ -775,10 +745,8 @@ static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
 	size_t i;
 	int ret;	
 
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted"); // ??? many dup
+	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
-	}
 
 	if (reg == ppc476fs->MSR_reg) {
 		MSR_new_value = buf_get_u32(buf, 0, 31);
@@ -824,10 +792,8 @@ static int ppc476fs_get_fpu_reg(struct reg *reg)
 {
 	struct target *target = reg->arch_info;
 
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted"); // ??? many dup
+	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
-	}
 
 	reg->valid = false;
 	reg->dirty = false;
@@ -840,10 +806,8 @@ static int ppc476fs_set_fpu_reg(struct reg *reg, uint8_t *buf)
 	struct target *target = reg->arch_info;
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted"); // ??? many dup
+	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
-	}
 
 	if ((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) == 0)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -948,20 +912,161 @@ static void regs_status_invalidate(struct target *target)
 	}
 }
 
+static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+	uint32_t iac_mask;
+
+	assert(breakpoint->set != 0);
+
+	iac_mask = (DBCR0_IAC1_MASK >> breakpoint->linked_BRP);
+	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~iac_mask);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R31
+	if (!ppc476fs->gpr_regs[31]->dirty) {
+		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
+		if (ret != ERROR_OK)
+			return ret;
+	}
+
+	breakpoint->set = 0;
+
+	return ERROR_OK;
+}
+
+static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+	int iac_index = 0;
+	uint32_t iac_mask;
+
+	assert(breakpoint->set == 0);
+
+	while (true) {
+		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
+		if ((ppc476fs->DBCR0_value & iac_mask) == 0)
+			break;
+		++iac_index;
+	}
+	assert(iac_index < 4);
+
+	breakpoint->linked_BRP = iac_index;
+
+	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, breakpoint->address);
+	if (ret != ERROR_OK)
+		return ret;	
+	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R31
+	if (!ppc476fs->gpr_regs[31]->dirty) {
+		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
+		if (ret != ERROR_OK)
+			return ret;
+	}
+
+	breakpoint->set = 1;
+
+	return ERROR_OK;
+}
+
+static int enable_breakpoints(struct target *target)
+{
+	struct breakpoint *bp = target->breakpoints;
+	int ret;
+
+	while (bp != NULL) {
+		if (bp->set == 0) {
+			ret = set_breakpoint(target, bp);
+			if (ret != ERROR_OK)
+				return ret;
+		}
+		bp = bp->next;
+	}
+
+	return ERROR_OK;
+}
+
+static int restore_state_before_run(struct target *target, int current, uint32_t address, enum target_debug_reason  debug_reason)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	// current = 1: continue on current pc, otherwise continue at <address>
+	if (!current) {
+		set_reg_value_32(ppc476fs->PC_reg, address);
+		ppc476fs->PC_reg->valid = true;
+		ppc476fs->PC_reg->dirty = true;
+	}
+
+	ret = write_dirty_fpu_regs(target);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_dirty_gen_regs(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = enable_breakpoints(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	target->debug_reason = debug_reason;
+
+	regs_status_invalidate(target);
+
+	return ERROR_OK;
+}
+
+static int ppc476fs_poll(struct target *target);
+static int ppc476fs_halt(struct target *target);
+
+static int to_halt_state(struct target *target)
+{
+	int ret = ppc476fs_poll(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if (target->state == TARGET_HALTED)
+		return ERROR_OK;
+
+	ret = ppc476fs_halt(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = ppc476fs_poll(target);
+	if (ret != ERROR_OK)
+		return ret;
+	
+	if (target->state != TARGET_HALTED)
+		return ERROR_FAIL;
+
+	return ERROR_OK;
+}
+
 static int ppc476fs_poll(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	enum target_state prev_state = target->state;
-	uint32_t jdsr_value, dbsr_value;
+	uint32_t JDSR_value, DBSR_value;
 	int ret;
 
-	ret = read_JDSR(target, &jdsr_value);
+	ret = read_JDSR(target, &JDSR_value);
 	if (ret != ERROR_OK) {
 		target->state = TARGET_UNKNOWN;
 		return ret;
 	}
 
-	if ((jdsr_value & JDSR_PSP_MASK) != 0)
+	if ((JDSR_value & JDSR_PSP_MASK) != 0)
 		target->state = TARGET_HALTED;
 	else
 		target->state = TARGET_RUNNING;
@@ -974,7 +1079,7 @@ static int ppc476fs_poll(struct target *target)
 		ret = read_required_fpu_regs(target);
 		if (ret != ERROR_OK)
 			return ret;
-		ret = read_spr_reg(target, SPR_REG_NUM_DBSR, &dbsr_value);
+		ret = read_spr_reg(target, SPR_REG_NUM_DBSR, &DBSR_value);
 		if (ret != ERROR_OK)
 			return ret;
 
@@ -985,12 +1090,10 @@ static int ppc476fs_poll(struct target *target)
 				return ret;
 		}
 
-		printf("*** DBSR = 0x%08X\n", dbsr_value); // ???
-
-		if (dbsr_value != 0) {
-			if ((dbsr_value & DBSR_IAC_ALL_MASK) != 0)
+		if (DBSR_value != 0) {
+			if ((DBSR_value & DBSR_IAC_ALL_MASK) != 0)
 				target->debug_reason = DBG_REASON_BREAKPOINT;
-			else if ((dbsr_value & DBSR_DAC_ALL_MASK) != 0)
+			else if ((DBSR_value & DBSR_DAC_ALL_MASK) != 0)
 				target->debug_reason = DBG_REASON_WATCHPOINT;
 			ret = clear_DBSR(target);
 			if (ret != ERROR_OK)
@@ -1018,118 +1121,9 @@ int ppc476fs_arch_state(struct target *target)
 	return ERROR_OK;
 }
 
-static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
-	int ret;
-	size_t iac_index = 0;
-	uint32_t iac_mask;
-
-	assert(breakpoint->set != 0);
-
-	printf("*** unset break\n"); // ???
-
-	iac_mask = (DBCR0_IAC1_MASK >> breakpoint->linked_BRP);
-	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~iac_mask);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R31
-	if (!ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
-
-	breakpoint->set = 0;
-
-	return ERROR_OK;
-}
-
-static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
-	int ret;
-	int iac_index = 0;
-	uint32_t iac_mask;
-
-	assert(breakpoint->set == 0);
-
-	while (true) {
-		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
-		if ((ppc476fs->DBCR0_value & iac_mask) == 0)
-			break;
-		++iac_index;
-	}
-	assert(iac_index < 4);
-
-	printf("*** index = %i, mask = 0x%08X\n", iac_index, iac_mask); // ???
-
-	breakpoint->linked_BRP = iac_index;
-
-	printf("*** address = 0x%08X\n", breakpoint->address); // ???
-	// ??? ret = write_cpu_reg(target, &IACx_data[iac_index], &breakpoint->address);
-	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, breakpoint->address);
-	if (ret != ERROR_OK)
-		return ret;
-	
-	/* ??? { // ????
-		uint32_t test;
-		ret = read_cpu_reg(target, &IACx_data[iac_index], &test);
-		printf("*** test = 0x%08X\n", test); // ???
-	}*/
-
-	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask); // ????
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R31
-	if (!ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
-
-/* ???	{ // ????
-		uint32_t test;
-		ret = read_cpu_reg(target, &DBCR0_data, &test);
-		printf("*** test2 = 0x%08X, 0x%08X\n", test, ppc476fs->DBCR0_value); // ???
-	}*/
-
-	breakpoint->set = 1;
-
-	printf("*** setok\n"); // ???
-
-	return ERROR_OK;
-}
-
-static int enable_breakpoints(struct target *target)
-{
-	struct breakpoint *bp = target->breakpoints;
-	int ret;
-
-	printf("*** enable"); // ???
-
-	while (bp != NULL) {
-		if (bp->set == 0) {
-			ret = set_breakpoint(target, bp);
-			if (ret != ERROR_OK)
-				return ret;
-		}
-		bp = bp->next;
-	}
-
-	return ERROR_OK;
-}
-
-// ??? messages to main procedures
-
 static int ppc476fs_halt(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
 	int ret;
-
-	LOG_DEBUG("target->state: %s", target_state_name(target));
 
 	if (target->state == TARGET_HALTED) {
 		LOG_WARNING("target was already halted");
@@ -1139,12 +1133,9 @@ static int ppc476fs_halt(struct target *target)
 	if (target->state == TARGET_UNKNOWN)
 		LOG_WARNING("target was in unknown state when halt was requested");
 
-	/* break processor ??? */
 	ret = write_JDCR(target, JDCR_STO_MASK);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot set JDCR register"); // ??? many dup
+	if (ret != ERROR_OK)
 		return ret;
-	}
 
 	target->debug_reason = DBG_REASON_DBGRQ;
 
@@ -1153,48 +1144,13 @@ static int ppc476fs_halt(struct target *target)
 
 static int ppc476fs_resume(struct target *target, int current, uint32_t address, int handle_breakpoints, int debug_execution)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
-	int ret;
-
-	printf("*** resume\n"); // ???
-
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
-		return ERROR_TARGET_NOT_HALTED;
-	}
-
-	// current = 1: continue on current pc, otherwise continue at <address>
-	if (!current) {
-		set_reg_value_32(ppc476fs->PC_reg, address);
-		ppc476fs->PC_reg->valid = true;
-		ppc476fs->PC_reg->dirty = true;
-	}
-
-	// ??? optimize
-	ret = write_dirty_fpu_regs(target);
+	int ret = restore_state_before_run(target, current, address, DBG_REASON_NOTHALTED);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = write_dirty_gen_regs(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	printf("*** resume 2\n"); // ???
-
-	ret = enable_breakpoints(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	printf("*** resume 3\n"); // ???
-
-	target->debug_reason = DBG_REASON_NOTHALTED;
 
 	ret = write_JDCR(target, 0);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot set JDCR register");
+	if (ret != ERROR_OK)
 		return ret;
-	}
-
-	regs_status_invalidate(target);
 
 	if (debug_execution) {
 		target->state = TARGET_DEBUG_RUNNING;
@@ -1210,76 +1166,16 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 
 static int ppc476fs_step(struct target *target, int current, uint32_t address, int handle_breakpoints)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
-	int ret;
-
-	// ??? struct breakpoint *breakpoint = NULL;
-
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
-		return ERROR_TARGET_NOT_HALTED;
-	}
-
-	// current = 1: continue on current pc, otherwise continue at <address>
-	if (!current) {
-		set_reg_value_32(ppc476fs->PC_reg, address);
-		ppc476fs->PC_reg->valid = true;
-		ppc476fs->PC_reg->dirty = true;
-	}
-
-	// ??? optimize
-	ret = write_dirty_fpu_regs(target);
+	int ret = restore_state_before_run(target, current, address, DBG_REASON_SINGLESTEP);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = write_dirty_gen_regs(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ret = enable_breakpoints(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	target->debug_reason = DBG_REASON_SINGLESTEP;
 
 	ret = write_JDCR(target, JDCR_STO_MASK | JDCR_SS_MASK);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot set JDCR register");
+	if (ret != ERROR_OK)
 		return ret;
-	}
-
-	regs_status_invalidate(target);
 
 	target->state = TARGET_RUNNING;
    	target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-
-	printf("stepping...\n"); // ???
-
-	return ERROR_OK;
-}
-
-// ??? all register names to UPPER case
-
-static int to_halt_state(struct target *target)
-{
-	int ret;
-
-	ret = ppc476fs_poll(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	if (target->state == TARGET_HALTED)
-		return ERROR_OK;
-
-	ret = ppc476fs_halt(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ret = ppc476fs_poll(target);
-	if (ret != ERROR_OK)
-		return ret;
-	
-	if (target->state != TARGET_HALTED)
-		return ERROR_FAIL;
 
 	return ERROR_OK;
 }
@@ -1295,82 +1191,10 @@ int ppc476fs_get_gdb_reg_list(struct target *target, struct reg **reg_list[], in
 	return ERROR_OK;
 }
 
-// ???
-// R0, R1 is already saved
-// Register autoincrement mode is not used becasue of JTAG communication BUG
-// static int read_memory_internal(struct target *target, uint32_t address, uint32_t size, uint32_t count, uint8_t *buffer)
-// {
-// 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-// 	// ??? const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
-// 	// ??? const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
-// 	uint32_t code;
-// 	uint32_t shift;
-// 	uint32_t i;
-// 	uint32_t j;
-// 	uint32_t value;
-// 	int ret;
-
-// 	switch (size)
-// 	{
-// 	case 1:
-// 		code = 0x88010000; // lbz %R0, 0(%R1)
-// 		shift = 24;
-// 		break;
-// 	case 2:
-// 		code = 0xA0010000; // lhz %R0, 0(%R1)
-// 		shift = 16;
-// 		break;
-// 	case 4:
-// 		code = 0x80010000; // lwz %R0, 0(%R1)
-// 		shift = 0;
-// 		break;
-// 	default:
-// 		assert(false);
-// 	}
-
-// 	for (i = 0; i < count; ++i) {
-// 		// ??? ret = write_cpu_reg(target, R1_reg_data, &address);
-// 		ret = write_gpr_reg(target, 1, address);
-// 		if (ret != ERROR_OK)
-// 			return ret;
-// 		ret = stuff_code(target, code);
-// 		if (ret != ERROR_OK)
-// 			return ret;
-// 		// ??? ret = read_cpu_reg(target, R0_reg_data, &value);
-// 		ret = read_gpr_reg(target, 0, &value);
-// 		if (ret != ERROR_OK)
-// 			return ret;
-// 		value <<= shift;
-// 		for (j = 0; j < size; ++j)
-// 		{
-// 			*(buffer++) = (value >> 24);
-// 			value <<= 8;
-// 		}
-// 		address += size;
-// 	}
-
-// 	// restore R1
-// 	if (!ppc476fs->gpr_regs[1]->dirty) {
-// 		ret = write_gpr_reg(target, 1, get_reg_value_32(ppc476fs->gpr_regs[1]));
-// 		if (ret != ERROR_OK)
-// 			return ret;
-// 	}
-
-// 	// restore R0
-// 	if (!ppc476fs->gpr_regs[0]->dirty) {
-// 		ret = write_gpr_reg(target, 0, get_reg_value_32(ppc476fs->gpr_regs[0]));
-// 		if (ret != ERROR_OK)
-// 			return ret;
-// 	}
-
-// 	return ERROR_OK;
-// }
-
+// IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
 static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	// ??? const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
-	// ??? const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
 	uint32_t code;
 	uint32_t shift;
 	uint32_t i;
@@ -1378,16 +1202,8 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
 	uint32_t value;
 	int ret;
 
-	// ??? const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
-	// ??? const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
-	// ??? uint32_t R0_save_value;
-	// ??? uint32_t R1_save_value;
-	// ??? int ret, main_ret;
-
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
-	}
 
 	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
 		return ERROR_COMMAND_SYNTAX_ERROR;
@@ -1396,36 +1212,6 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
 	memset(buffer, 0, size * count); // clear result buffer
-
-	/* ???? ret = read_cpu_reg(target, R0_reg_data, &R0_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot read cpu register 3"); // ??? dup
-		return ret;
-	}
-
-	ret = read_cpu_reg(target, R1_reg_data, &R1_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot read cpu register 4"); // ??? dup
-		return ret;
-	}
-
-	main_ret = read_memory_internal(target, address, size, count, buffer);
-	if (main_ret != ERROR_OK)
-		LOG_ERROR("cannot read memory"); // ???
-
-	ret = write_cpu_reg(target, R1_reg_data, &R1_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot write cpu register"); // ??? dup
-		if (main_ret == ERROR_OK) main_ret = ret;
-	}
-
-	ret = write_cpu_reg(target, R0_reg_data, &R0_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot write cpu register"); // ??? dup
-		if (main_ret == ERROR_OK) main_ret = ret;
-	}
-
-	return main_ret;*/
 
 	switch (size)
 	{
@@ -1446,14 +1232,12 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
 	}
 
 	for (i = 0; i < count; ++i) {
-		// ??? ret = write_cpu_reg(target, R1_reg_data, &address);
 		ret = write_gpr_reg(target, 1, address);
 		if (ret != ERROR_OK)
 			return ret;
 		ret = stuff_code(target, code);
 		if (ret != ERROR_OK)
 			return ret;
-		// ??? ret = read_cpu_reg(target, R0_reg_data, &value);
 		ret = read_gpr_reg(target, 0, &value);
 		if (ret != ERROR_OK)
 			return ret;
@@ -1483,61 +1267,9 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
 	return ERROR_OK;
 }
 
-// R0, R1 is already saved
-// Register autoincrement mode is not used becasue of JTAG communication BUG
-/* ???static int write_memory_internal(struct target *target, uint32_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); // ???
-	const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
-	const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
-	uint32_t code, i, j, value;
-	int ret;
-
-	switch (size)
-	{
-	case 1:
-		code = 0x98010000; // stb %R0, 0(%R1)
-		break;
-	case 2:
-		code = 0xB0010000; // sth %R0, 0(%R1)
-		break;
-	case 4:
-		code = 0x90010000; // stw %R0, 0(%R1)
-		break;
-	default:
-		assert(false);
-	}
-
-	for (i = 0; i < count; ++i) {
-		ret = write_cpu_reg(target, R1_reg_data, &address);
-		if (ret != ERROR_OK)
-			return ret;
-		value = 0;
-		for (j = 0; j < size; ++j)
-		{
-			value <<= 8;
-			value |= (uint32_t)*(buffer++);
-		}
-		ret = write_cpu_reg(target, R0_reg_data, &value);
-		if (ret != ERROR_OK)
-			return ret;
-		ret = stuff_code(target, code);
-		if (ret != ERROR_OK)
-			return ret;
-		address += size;
-	}
-
-	return ERROR_OK;
-}*/
-
+// IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
 static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
-	// const struct ppc476fs_reg_info *R0_reg_data = &reg_info[find_reg_by_name(target, "R0")->number];
-	// const struct ppc476fs_reg_info *R1_reg_data = &reg_info[find_reg_by_name(target, "R1")->number];
-	// uint32_t R0_save_value;
-	// uint32_t R1_save_value;
-// ???	int ret, main_ret;
-
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	uint32_t code;
 	uint32_t i;
@@ -1545,46 +1277,14 @@ static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32
 	uint32_t value;
 	int ret;
 
-	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
-	}
 
 	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u)))
 		return ERROR_TARGET_UNALIGNED_ACCESS;
-
-/* ????	ret = read_cpu_reg(target, R0_reg_data, &R0_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot read cpu register 5"); // ??? dup
-		return ret;
-	}
-
-	ret = read_cpu_reg(target, R1_reg_data, &R1_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot read cpu register 6"); // ??? dup
-		return ret;
-	}
-
-	main_ret = write_memory_internal(target, address, size, count, buffer);
-	if (main_ret != ERROR_OK)
-		LOG_ERROR("cannot read memory"); // ???
-
-	ret = write_cpu_reg(target, R1_reg_data, &R1_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot write cpu register"); // ??? dup
-		if (main_ret == ERROR_OK) main_ret = ret;
-	}
-
-	ret = write_cpu_reg(target, R0_reg_data, &R0_save_value);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("cannot write cpu register"); // ??? dup
-		if (main_ret == ERROR_OK) main_ret = ret;
-	}
-
-	return main_ret;*/
 
 	switch (size)
 	{
@@ -1602,7 +1302,6 @@ static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32
 	}
 
 	for (i = 0; i < count; ++i) {
-		// ??? ret = write_cpu_reg(target, R1_reg_data, &address);
 		ret = write_gpr_reg(target, 1, address);
 		if (ret != ERROR_OK)
 			return ret;
@@ -1612,7 +1311,6 @@ static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32
 			value <<= 8;
 			value |= (uint32_t)*(buffer++);
 		}
-		// ??? ret = write_cpu_reg(target, R0_reg_data, &value);
 		ret = write_gpr_reg(target, 0, value);
 		if (ret != ERROR_OK)
 			return ret;
@@ -1645,9 +1343,7 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 	int ret, bp_count;
 
 	if (breakpoint->type != BKPT_HARD)
-		return ERROR_TARGET_FAILURE; // only hardware points
-	
-	printf("*** length = %i \n", breakpoint->length); // ???
+		return ERROR_TARGET_FAILURE; // only hardware points	
 	if (breakpoint->length != 4)
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
@@ -1665,8 +1361,6 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 		return ret;
 
 	breakpoint->set = 0;
-
-	printf("*** ok 1\n"); // ???
 
 	return ERROR_OK;
 }
@@ -1718,7 +1412,7 @@ static int ppc476fs_examine(struct target *target)
 	struct breakpoint *bp;
 	int ret;
 
-	ret = to_halt_state(target); // ??? name
+	ret = to_halt_state(target);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1840,8 +1534,8 @@ struct target_type ppc476fs_target = {
 	.resume = ppc476fs_resume,
 	.step = ppc476fs_step,
 
-	// .assert_reset = mips_m4k_assert_reset,
-	// .deassert_reset = mips_m4k_deassert_reset,
+	// ??? .assert_reset = mips_m4k_assert_reset,
+	// ??? .deassert_reset = mips_m4k_deassert_reset,
 
 	.get_gdb_reg_list = ppc476fs_get_gdb_reg_list,
 
