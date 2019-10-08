@@ -1534,9 +1534,6 @@ struct target_type ppc476fs_target = {
 	.resume = ppc476fs_resume,
 	.step = ppc476fs_step,
 
-	// ??? .assert_reset = mips_m4k_assert_reset,
-	// ??? .deassert_reset = mips_m4k_deassert_reset,
-
 	.get_gdb_reg_list = ppc476fs_get_gdb_reg_list,
 
 	.read_memory = ppc476fs_read_memory,
