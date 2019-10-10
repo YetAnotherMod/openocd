@@ -9,6 +9,11 @@
 #include <target/breakpoints.h>
 #include <helper/log.h>
 
+// jtag instruction codes without core ids
+#define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
+#define JTAG_INSTR_WRITE_JISB_READ_JDSR 0x38 /* 0b0111000 */
+#define JTAG_INSTR_WRITE_READ_DBDR 0x58 /* 0b1011000 */
+
 #define JDSR_PSP_MASK (1 << (31 - 31))
 
 #define JDCR_STO_MASK (1 << (31 - 0))
@@ -81,6 +86,10 @@ static const struct reg_arch_type ppc476fs_fpu_reg_type = {
 	.set = ppc476fs_set_fpu_reg
 };
 
+static const uint32_t coreid_mask[4] = {
+	0x4, 0x6
+};
+
 static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
 {
 	return target->arch_info;
@@ -94,7 +103,7 @@ static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
 	*((uint32_t*)reg->value) = value;
 }
 
-static int jtag_read_write_register(struct target *target, uint32_t instr, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
+static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
 {
 	struct scan_field field;
 	struct scan_field fields[2];
@@ -104,7 +113,7 @@ static int jtag_read_write_register(struct target *target, uint32_t instr, uint3
 	uint8_t valid_buffer[4];
 	int ret;
 
-	buf_set_u32(instr_buffer, 0, target->tap->ir_length, instr);
+	buf_set_u32(instr_buffer, 0, target->tap->ir_length, instr_without_coreid | coreid_mask[target->coreid]);
 	field.num_bits = target->tap->ir_length;
 	field.out_value = instr_buffer;
 	field.in_value = NULL;
@@ -133,21 +142,21 @@ static int jtag_read_write_register(struct target *target, uint32_t instr, uint3
 
 static int read_JDSR(struct target *target, uint32_t *data)
 {
-	return jtag_read_write_register(target, 0x2C, 0, 0, data); // 0b0101100
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 0, 0, data);
 }
 
 static int write_JDCR(struct target *target, uint32_t data)
 {
 	int ret;
 
-	ret = jtag_read_write_register(target, 0x2C, 1, data, NULL); // 0b0101100
+	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 1, data, NULL);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// !!! IMPORTANT
 	// make additional write_JDCR/read_JDSR request with valid bit == 0
 	// to correct a JTAG communication BUG
-	return jtag_read_write_register(target, 0x2C, 0, 0, NULL); // 0b0101100
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 0, 0, NULL);
 }
 
 static int stuff_code(struct target *target, uint32_t code)
@@ -156,19 +165,19 @@ static int stuff_code(struct target *target, uint32_t code)
 
 	assert(target->state == TARGET_HALTED);
 
-	ret =  jtag_read_write_register(target, 0x3C, 1, code, NULL); // 0b0111100
+	ret =  jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// !!! IMPORTANT
 	// make additional write_JISB/read_JDSR request with valid bit == 0
 	// to correct a JTAG communication BUG
-	return jtag_read_write_register(target, 0x3C, 0, 0, NULL); // 0b0111100
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 0, 0, NULL);
 }
 
 static int read_DBDR(struct target *target, uint32_t *data)
 {
-	return jtag_read_write_register(target, 0x5C, 0, 0, data); // 0b1011100
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 0, 0, data);
 }
 
 static int write_DBDR(struct target *target, uint32_t data)
@@ -177,14 +186,14 @@ static int write_DBDR(struct target *target, uint32_t data)
 
 	assert(target->state == TARGET_HALTED);
 
-	ret = jtag_read_write_register(target, 0x5C, 1, data, NULL); // 0b1011100
+	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 1, data, NULL);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// !!! IMPORTANT
 	// make additional write_DBDR/read_DBDR request with valid bit == 0
 	// to correct a JTAG communication BUG
-	return jtag_read_write_register(target, 0x5C, 0, 0, NULL); // 0b1011100
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 0, 0, NULL);
 }
 
 static int read_gpr_reg(struct target *target, int reg_num, uint32_t *data)
@@ -1053,6 +1062,49 @@ static int to_halt_state(struct target *target)
 	return ERROR_OK;
 }
 
+static int examine_internal(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct breakpoint *bp;
+	int ret;
+
+	ret = to_halt_state(target);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("Device halt error (error code = %i)", ret);
+		return ret;
+	}
+
+	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_spr_reg(target, SPR_REG_NUM_DBCR1, 0);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_spr_reg(target, SPR_REG_NUM_DBCR2, 0);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R31
+	if (!ppc476fs->gpr_regs[31]->dirty) {
+		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
+		if (ret != ERROR_OK)
+			return ret;
+	}
+
+	ret = clear_DBSR(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// clear breakpoints status
+	bp = target->breakpoints;
+	while (bp != NULL) {
+		bp->set = 0;
+		bp = bp->next;
+	}
+
+	return ERROR_OK;
+}
+
 static int ppc476fs_poll(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -1114,8 +1166,9 @@ int ppc476fs_arch_state(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 
-	LOG_USER("target halted due to %s, PC: 0x%08X",
+	LOG_USER("target halted due to %s, CoreID: %i, PC: 0x%08X",
 		debug_reason_name(target),
+		target->coreid,
 		get_reg_value_32(ppc476fs->PC_reg));
 
 	return ERROR_OK;
@@ -1396,6 +1449,11 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 	struct ppc476fs_common *ppc476fs = calloc(1, sizeof(struct ppc476fs_common));
 	target->arch_info = ppc476fs;
 
+	if ((target->coreid < 0) || (target->coreid > 1)) {
+		LOG_ERROR("CoreID=%i is not allowed. It must be from 0 or 1. It has been set to 0.", target->coreid);
+		target->coreid = 0;
+	}
+
 	return ERROR_OK;
 }
 
@@ -1408,40 +1466,10 @@ static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *
 
 static int ppc476fs_examine(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	struct breakpoint *bp;
-	int ret;
-
-	ret = to_halt_state(target);
-	if (ret != ERROR_OK)
+	int ret = examine_internal(target);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("Device has not been examined (error code = %i)", ret);
 		return ret;
-
-	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = write_spr_reg(target, SPR_REG_NUM_DBCR1, 0);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = write_spr_reg(target, SPR_REG_NUM_DBCR2, 0);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R31
-	if (!ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
-
-	ret = clear_DBSR(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// clear breakpoints status
-	bp = target->breakpoints;
-	while (bp != NULL) {
-		bp->set = 0;
-		bp = bp->next;
 	}
 
    	target_set_examined(target);
