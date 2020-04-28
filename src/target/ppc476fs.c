@@ -298,7 +298,7 @@ static int read_required_gen_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
-	size_t i;
+	int i;
 	bool R31_used = false;
 	bool LR_used = false;
 	uint32_t value;
@@ -405,7 +405,7 @@ static int read_required_fpu_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
-	size_t i;
+	int i;
 	uint32_t value_1;
 	uint32_t value_2;
 	uint32_t code;
@@ -528,7 +528,7 @@ int write_dirty_gen_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
-	size_t i;
+	int i;
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
@@ -609,7 +609,7 @@ int write_dirty_fpu_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
-	size_t i;
+	int i;
 	uint32_t value_1;
 	uint32_t value_2;
 	uint32_t code;
@@ -830,7 +830,7 @@ static int ppc476fs_set_fpu_reg(struct reg *reg, uint8_t *buf)
 
 static struct reg *fill_reg(
 	struct target *target,
-	size_t all_index,
+	int all_index,
 	struct reg *reg,
 	const char *reg_name,
 	enum reg_type reg_type,
@@ -867,11 +867,11 @@ static void build_reg_caches(struct target *target)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg_cache *gen_cache = calloc(1, sizeof(struct reg_cache));
 	struct reg_cache *fpu_cache = calloc(1, sizeof(struct reg_cache));
-	size_t all_index = 0;
+	int all_index = 0;
 	struct reg *gen_regs;
 	struct reg *fpu_regs;
 	char reg_name[64];
-	size_t i;
+	int i;
 
 	gen_cache->name = "PowerPC General Purpose Registers";
 	gen_cache->num_regs = GEN_CACHE_REG_COUNT;
@@ -887,12 +887,12 @@ static void build_reg_caches(struct target *target)
 	fpu_regs = fpu_cache->reg_list;
 
 	for (i = 0; i < GPR_REG_COUNT; ++i) {
-		sprintf(reg_name, "R%zu",i);
+		sprintf(reg_name, "R%i", i);
 		ppc476fs->gpr_regs[i] = fill_reg(target, all_index++, gen_regs++, strdup(reg_name), REG_TYPE_UINT32, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core"); // R0-R31
 	}
 
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
-		sprintf(reg_name, "F%zu",i);
+		sprintf(reg_name, "F%i", i);
 		ppc476fs->fpr_regs[i] = fill_reg(target, all_index++, fpu_regs++, strdup(reg_name), REG_TYPE_IEEE_DOUBLE, 64, &ppc476fs_fpu_reg_type, "org.gnu.gdb.power.fpu"); // F0-R31
 	}
 
@@ -965,7 +965,7 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 	breakpoint->linked_BRP = iac_index;
 
-	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, breakpoint->address);
+	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, (uint32_t)breakpoint->address);
 	if (ret != ERROR_OK)
 		return ret;	
 	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask);
@@ -1001,7 +1001,7 @@ static int enable_breakpoints(struct target *target)
 	return ERROR_OK;
 }
 
-static int restore_state_before_run(struct target *target, int current, uint32_t address, enum target_debug_reason  debug_reason)
+static int restore_state_before_run(struct target *target, int current, target_addr_t address, enum target_debug_reason  debug_reason)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
@@ -1013,7 +1013,7 @@ static int restore_state_before_run(struct target *target, int current, uint32_t
 
 	// current = 1: continue on current pc, otherwise continue at <address>
 	if (!current) {
-		set_reg_value_32(ppc476fs->PC_reg, address);
+		set_reg_value_32(ppc476fs->PC_reg, (uint32_t)address);
 		ppc476fs->PC_reg->valid = true;
 		ppc476fs->PC_reg->dirty = true;
 	}
@@ -1195,7 +1195,7 @@ static int ppc476fs_halt(struct target *target)
 	return ERROR_OK;
 }
 
-static int ppc476fs_resume(struct target *target, int current, uint32_t address, int handle_breakpoints, int debug_execution)
+static int ppc476fs_resume(struct target *target, int current, target_addr_t address, int handle_breakpoints, int debug_execution)
 {
 	int ret = restore_state_before_run(target, current, address, DBG_REASON_NOTHALTED);
 	if (ret != ERROR_OK)
@@ -1217,7 +1217,7 @@ static int ppc476fs_resume(struct target *target, int current, uint32_t address,
 	return ERROR_OK;
 }
 
-static int ppc476fs_step(struct target *target, int current, uint32_t address, int handle_breakpoints)
+static int ppc476fs_step(struct target *target, int current, target_addr_t address, int handle_breakpoints)
 {
 	int ret = restore_state_before_run(target, current, address, DBG_REASON_SINGLESTEP);
 	if (ret != ERROR_OK)
@@ -1245,7 +1245,7 @@ int ppc476fs_get_gdb_reg_list(struct target *target, struct reg **reg_list[], in
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
-static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_t size, uint32_t count, uint8_t *buffer)
+static int ppc476fs_read_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	uint32_t code;
@@ -1285,7 +1285,7 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
 	}
 
 	for (i = 0; i < count; ++i) {
-		ret = write_gpr_reg(target, 1, address);
+		ret = write_gpr_reg(target, 1, (uint32_t)address);
 		if (ret != ERROR_OK)
 			return ret;
 		ret = stuff_code(target, code);
@@ -1321,7 +1321,7 @@ static int ppc476fs_read_memory(struct target *target, uint32_t address, uint32_
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
-static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
+static int ppc476fs_write_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	uint32_t code;
@@ -1355,7 +1355,7 @@ static int ppc476fs_write_memory(struct target *target, uint32_t address, uint32
 	}
 
 	for (i = 0; i < count; ++i) {
-		ret = write_gpr_reg(target, 1, address);
+		ret = write_gpr_reg(target, 1, (uint32_t)address);
 		if (ret != ERROR_OK)
 			return ret;
 		value = 0;
@@ -1488,12 +1488,12 @@ COMMAND_HANDLER(ppc476fs_handle_status_command)
 
 	ret = read_JDSR(target, &JDSR_value);
 	if (ret != ERROR_OK) {
-		command_print(CMD_CTX, "cannot read JDSR register");
+		command_print(CMD, "cannot read JDSR register");
 		return ret;
 	}
 
-	command_print(CMD_CTX, "PowerPC JTAG status:");
-	command_print(CMD_CTX, "  JDSR = 0x%08X", JDSR_value);
+	command_print(CMD, "PowerPC JTAG status:");
+	command_print(CMD, "  JDSR = 0x%08X", JDSR_value);
 
 	return ERROR_OK;
 }
@@ -1512,13 +1512,13 @@ COMMAND_HANDLER(ppc476fs_handle_jtag_speed_command)
 	while (time(NULL) == current_time) {
 		ret = read_DBDR(target, &dummy_data);
 		if (ret != ERROR_OK) {
-			command_print(CMD_CTX, "JTAG communication error");
+			command_print(CMD, "JTAG communication error");
 			return ret;
 		}
 		++count;
 	}
 
-	command_print(CMD_CTX, "JTAG speed = %u (transaction per second)", count);
+	command_print(CMD, "JTAG speed = %u (transaction per second)", count);
 
 	return ERROR_OK;
 }
