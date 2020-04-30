@@ -18,6 +18,7 @@
 
 #define JDCR_STO_MASK (1 << (31 - 0))
 #define JDCR_SS_MASK (1 << (31 - 2))
+#define JDCR_RESET_MASK (3 << (31 - 4)) // system reset
 #define JDCR_RSDBSR_MASK (1 << (31 - 8))
 
 #define SPR_REG_NUM_LR 8 
@@ -31,6 +32,7 @@
 
 #define DBCR0_EDM_MASK (1 << (63 - 32))
 #define DBCR0_IAC1_MASK (1 << (63 - 40))
+#define DBCR0_IACX_MASK (0xF << (63 - 43))
 #define DBCR0_FT_MASK (1 << (63 - 63))
 
 #define DBSR_IAC1_MASK (1 << (63 - 40))
@@ -68,6 +70,11 @@ struct ppc476fs_common {
 	struct reg *XER_reg;
 	struct reg *FPSCR_reg;
 	uint32_t DBCR0_value;
+	uint32_t saved_R1; // ???
+	uint32_t saved_R2; // ???
+	uint32_t saved_R31; // ???
+	uint32_t saved_LR; // ???
+	uint64_t saved_F0; // ???
 };
 
 static int ppc476fs_get_gen_reg(struct reg *reg);
@@ -163,8 +170,6 @@ static int stuff_code(struct target *target, uint32_t code)
 {
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
-
 	ret =  jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
 	if (ret != ERROR_OK)
 		return ret;
@@ -183,8 +188,6 @@ static int read_DBDR(struct target *target, uint32_t *data)
 static int write_DBDR(struct target *target, uint32_t data)
 {
 	int ret;
-
-	assert(target->state == TARGET_HALTED);
 
 	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 1, data, NULL);
 	if (ret != ERROR_OK)
@@ -247,13 +250,7 @@ static int test_memory_at_stack(struct target *target)
 	uint32_t value_2;
 	int ret;
 
-	if (!ppc476fs->gpr_regs[1]->valid) // R1 must be valid (it is a stack pointer)
-		return ERROR_FAIL;
-	value_1 = get_reg_value_32(ppc476fs->gpr_regs[1]);
-	if ((value_1 < 8) || ((value_1 & 0x3) != 0)) // check the stack pointer
-		return ERROR_FAIL;
-
-	if (!ppc476fs->gpr_regs[2]->valid) // R2 must be valid
+	if ((ppc476fs->saved_R1 < 8) || ((ppc476fs->saved_R1 & 0x3) != 0)) // check the stack pointer
 		return ERROR_FAIL;
 
 	// set magic values to memory
@@ -284,12 +281,14 @@ static int test_memory_at_stack(struct target *target)
 	if (ret != ERROR_OK)
 		return ret;
 
+	// restore R2 // ??? change to R31
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
 	// check the magic values
-	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2)) {
-		if (!ppc476fs->gpr_regs[2]->dirty)
-			write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->gpr_regs[2])); // restore R2
+	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2))
 		return ERROR_FAIL;
-	}
 
 	return ERROR_OK;
 }
@@ -304,8 +303,6 @@ static int read_required_gen_regs(struct target *target)
 	uint32_t value;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
-
 	for (i = 0; i < GPR_REG_COUNT; ++i)
 	{
 		reg = ppc476fs->gpr_regs[i];
@@ -315,6 +312,12 @@ static int read_required_gen_regs(struct target *target)
 				return ret;
 			reg->valid = true;
 			reg->dirty = false;
+			if (i == 1) // ???
+				ppc476fs->saved_R1 = get_reg_value_32(reg);
+			else if (i == 2)
+				ppc476fs->saved_R2 = get_reg_value_32(reg);
+			else if (i == 31)
+				ppc476fs->saved_R31 = get_reg_value_32(reg);
 		}
 	}
 
@@ -325,6 +328,7 @@ static int read_required_gen_regs(struct target *target)
 			return ret;
 		ppc476fs->LR_reg->valid = true;
 		ppc476fs->LR_reg->dirty = false;
+		ppc476fs->saved_LR = get_reg_value_32(ppc476fs->LR_reg);
 	}
 
 	if (!ppc476fs->CTR_reg->valid) {
@@ -384,16 +388,16 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	// restore LR
-	if (LR_used && !ppc476fs->LR_reg->dirty) {
+	if (LR_used) {
 		R31_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fs->LR_reg));
+		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fs->saved_LR);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	// restore R31
-	if (R31_used && !ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
+	if (R31_used) {
+		ret = write_gpr_reg(target, 31, ppc476fs->saved_R31);
 		if (ret != ERROR_OK)
 			return ret;
 	}
@@ -412,8 +416,6 @@ static int read_required_fpu_regs(struct target *target)
 	bool F0_used = false;
 	bool read_need;
 	int ret;
-
-	assert(target->state == TARGET_HALTED);
 
 	read_need = false;
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
@@ -471,6 +473,8 @@ static int read_required_fpu_regs(struct target *target)
 			memcpy(reg->value + 4, &value_2, 4);
 			reg->valid = true;
 			reg->dirty = false;
+			if (i == 0)
+				ppc476fs->saved_F0 = *((uint64_t*)reg->value); // ???
 		}
 	}
 
@@ -493,10 +497,10 @@ static int read_required_fpu_regs(struct target *target)
 		ppc476fs->FPSCR_reg->dirty = false;
 	}
 
-	// restore F0
-	if (F0_used && !ppc476fs->fpr_regs[0]->dirty) {
-		memcpy(&value_1, ppc476fs->fpr_regs[0]->value, 4);
-		memcpy(&value_2, ppc476fs->fpr_regs[0]->value + 4, 4);
+	// restore F0 ??? ->func
+	if (F0_used) {
+		memcpy(&value_1, (uint8_t*)&ppc476fs->saved_F0 + 0, 4); // ??
+		memcpy(&value_2, (uint8_t*)&ppc476fs->saved_F0 + 4, 4);
 		ret = write_gpr_reg(target, 2, value_1);
 		if (ret != ERROR_OK)
 			return ret;
@@ -515,11 +519,9 @@ static int read_required_fpu_regs(struct target *target)
 	}
 
 	// restore R2
-	if (!ppc476fs->gpr_regs[2]->dirty) {
-		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->gpr_regs[2]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
 
 	return ERROR_OK;
 }
@@ -528,14 +530,14 @@ int write_dirty_gen_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
+	bool R31_used = false;
+	bool LR_used = false;
 	int i;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
-
 	if (ppc476fs->PC_reg->dirty) {
-		ppc476fs->gpr_regs[31]->dirty = true;
-		ppc476fs->LR_reg->dirty = true;
+		R31_used = true;
+		LR_used = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fs->PC_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -546,7 +548,7 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fs->CR_reg->dirty) {
-		ppc476fs->gpr_regs[31]->dirty = true;
+		R31_used = true;
 		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->CR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -557,7 +559,7 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fs->MSR_reg->dirty) {
-		ppc476fs->gpr_regs[31]->dirty = true;
+		R31_used = true;
 		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->MSR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -568,7 +570,7 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fs->XER_reg->dirty) {
-		ppc476fs->gpr_regs[31]->dirty = true;
+		R31_used = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_XER, get_reg_value_32(ppc476fs->XER_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -576,7 +578,7 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fs->CTR_reg->dirty) {
-		ppc476fs->gpr_regs[31]->dirty = true;
+		R31_used = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_CTR, get_reg_value_32(ppc476fs->CTR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -584,11 +586,20 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fs->LR_reg->dirty) {
-		ppc476fs->gpr_regs[31]->dirty = true;
+		R31_used = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fs->LR_reg));
 		if (ret != ERROR_OK)
 			return ret;
 		ppc476fs->LR_reg->dirty = false;
+		ppc476fs->saved_LR = get_reg_value_32(ppc476fs->LR_reg);
+		LR_used = false;
+	}
+
+	if (LR_used) {
+		R31_used = true;
+		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fs->saved_LR);
+		if (ret != ERROR_OK)
+			return ret;
 	}
 
 	for (i = 0; i < GPR_REG_COUNT; ++i)
@@ -599,7 +610,21 @@ int write_dirty_gen_regs(struct target *target)
 			if (ret != ERROR_OK)
 				return ret;
 			reg->dirty = false;
+			if (i == 1) // ???
+				ppc476fs->saved_R1 = get_reg_value_32(reg);
+			else if (i == 2)
+				ppc476fs->saved_R2 = get_reg_value_32(reg);
+			else if (i == 31) {
+				ppc476fs->saved_R31 = get_reg_value_32(reg);
+				R31_used = false;
+			}
 		}
+	}
+
+	if (R31_used) {
+		ret = write_gpr_reg(target, i, ppc476fs->saved_R31);
+		if (ret != ERROR_OK)
+			return ret;
 	}
 
 	return ERROR_OK;
@@ -609,16 +634,14 @@ int write_dirty_fpu_regs(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct reg *reg;
-	int i;
 	uint32_t value_1;
 	uint32_t value_2;
 	uint32_t code;
-	bool write_need;
+	bool write_need = false;
+	bool F0_used = false;
+	int i;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
-
-	write_need = false;
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
 		if (ppc476fs->fpr_regs[i]->dirty) {
 			write_need = true;
@@ -629,14 +652,15 @@ int write_dirty_fpu_regs(struct target *target)
 	if (!write_need)
 		return ERROR_OK;
 
-	assert((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) != 0);
+	assert((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) != 0); // ???
 
 	ret = test_memory_at_stack(target);
 	if (ret != ERROR_OK)
 		return ret;
 
 	if (ppc476fs->FPSCR_reg->dirty) {
-		if (!ppc476fs->fpr_regs[0]->valid) {
+		F0_used = true;
+		/* ??? if (!ppc476fs->fpr_regs[0]->valid) {
 			// read F0 if it has not read yet
 			ret = stuff_code(target, 0xD801FFF8); // stfd F0, -8(r1)
 			if (ret != ERROR_OK)
@@ -656,8 +680,8 @@ int write_dirty_fpu_regs(struct target *target)
 			memcpy(ppc476fs->fpr_regs[0]->value, &value_1, 4);
 			memcpy(ppc476fs->fpr_regs[0]->value + 4, &value_2, 4);
 			ppc476fs->fpr_regs[0]->valid = true;
-		}
-		ppc476fs->fpr_regs[0]->dirty = true; // F0 will be restored by original value late
+		}*/
+		// ??? ppc476fs->fpr_regs[0]->dirty = true; // F0 will be restored by original value late
 		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->FPSCR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -695,26 +719,57 @@ int write_dirty_fpu_regs(struct target *target)
 			if (ret != ERROR_OK)
 				return ret;
 			reg->dirty = false;
+			if (i == 0) {
+				ppc476fs->saved_F0 = *((uint64_t*)reg->value); // ???
+				F0_used = false;
+			}
 		}
 	}
 
-	// restore R2
-	if (!ppc476fs->gpr_regs[2]->dirty) {
-		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->gpr_regs[2]));
+	// restore F0 ??? ->func
+	if (F0_used) {
+		memcpy(&value_1, (uint8_t*)&ppc476fs->saved_F0 + 0, 4); // ???
+		memcpy(&value_2, (uint8_t*)&ppc476fs->saved_F0 + 4, 4);
+		ret = write_gpr_reg(target, 2, value_1);
+		if (ret != ERROR_OK)
+			return ret;
+		ret = stuff_code(target, 0x9041FFF8); // stw R2, -8(R1)
+		if (ret != ERROR_OK)
+			return ret;
+		ret = write_gpr_reg(target, 2, value_2);
+		if (ret != ERROR_OK)
+			return ret;
+		ret = stuff_code(target, 0x9041FFFC); // stw R2, -4(R1)
+		if (ret != ERROR_OK)
+			return ret;
+		ret = stuff_code(target, 0xC801FFF8); // lfd F0, -8(R1)
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
 	return ERROR_OK;
 }
 
-// R31 will be changed
+static void regs_status_invalidate(struct target *target)
+{
+	struct reg_cache *cache = target->reg_cache;
+
+	while (cache != NULL) {
+		register_cache_invalidate(cache);
+		cache = cache->next;
+	}
+}
+
+// the function uses R31 register and does not restore one
 static int write_DBCR0(struct target *target, uint32_t data)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
-
-	assert(ppc476fs->gpr_regs[31]->valid);
 
 	ret = write_spr_reg(target, SPR_REG_NUM_DBCR0, data);
 	if (ret != ERROR_OK)
@@ -727,8 +782,6 @@ static int write_DBCR0(struct target *target, uint32_t data)
 
 static int clear_DBSR(struct target *target)
 {
-	assert(target->state == TARGET_HALTED);
-
 	return write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
 }
 
@@ -770,11 +823,9 @@ static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
 			ret = stuff_code(target, 0x7FE00124); // mtmsr R31
 			if (ret != ERROR_OK)
 				return ret;
-			if (!ppc476fs->gpr_regs[31]->dirty) {
-				ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-				if (ret != ERROR_OK)
-					return ret;
-			}
+			ret = write_gpr_reg(target, 31, ppc476fs->saved_R31); // restore R31
+			if (ret != ERROR_OK)
+				return ret;
 			// invalidate FPU registers
 			for (i = 0; i < FPR_REG_COUNT; ++i) {
 				ppc476fs->fpr_regs[i]->valid = false;
@@ -911,16 +962,6 @@ static void build_reg_caches(struct target *target)
 	target->reg_cache = gen_cache;
 }
 
-static void regs_status_invalidate(struct target *target)
-{
-	struct reg_cache *cache = target->reg_cache;
-
-	while (cache != NULL) {
-		register_cache_invalidate(cache);
-		cache = cache->next;
-	}
-}
-
 static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -935,17 +976,16 @@ static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint
 		return ret;
 
 	// restore R31
-	if (!ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
+	ret = write_gpr_reg(target, 31, ppc476fs->saved_R31);
+	if (ret != ERROR_OK)
+		return ret;
 
 	breakpoint->set = 0;
 
 	return ERROR_OK;
 }
 
+// the function uses R31 register and does not restore one
 static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -972,13 +1012,6 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 	if (ret != ERROR_OK)
 		return ret;
 
-	// restore R31
-	if (!ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
-
 	breakpoint->set = 1;
 
 	return ERROR_OK;
@@ -986,6 +1019,7 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 static int enable_breakpoints(struct target *target)
 {
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct breakpoint *bp = target->breakpoints;
 	int ret;
 
@@ -998,9 +1032,62 @@ static int enable_breakpoints(struct target *target)
 		bp = bp->next;
 	}
 
+	// restore R31
+	ret = write_gpr_reg(target, 31, ppc476fs->saved_R31);
+	if (ret != ERROR_OK)
+		return ret;
+
 	return ERROR_OK;
 }
 
+static void break_points_invalidate(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct breakpoint *bp = target->breakpoints;
+
+	ppc476fs->DBCR0_value &= ~DBCR0_IACX_MASK;
+
+	while (bp != NULL) {
+		bp->set = 0;
+		bp = bp->next;
+	}
+}
+
+static int save_state(struct target *target)
+{
+	int ret;
+
+	regs_status_invalidate(target);
+
+	ret = read_required_gen_regs(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = read_required_fpu_regs(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+static int restore_state(struct target *target)
+{
+	int ret = write_dirty_fpu_regs(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = write_dirty_gen_regs(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = enable_breakpoints(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+// ??? optimize
 static int restore_state_before_run(struct target *target, int current, target_addr_t address, enum target_debug_reason  debug_reason)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -1018,14 +1105,7 @@ static int restore_state_before_run(struct target *target, int current, target_a
 		ppc476fs->PC_reg->dirty = true;
 	}
 
-	ret = write_dirty_fpu_regs(target);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = write_dirty_gen_regs(target);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ret = enable_breakpoints(target);
+	ret = restore_state(target);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1036,9 +1116,11 @@ static int restore_state_before_run(struct target *target, int current, target_a
 	return ERROR_OK;
 }
 
+// ???
 static int ppc476fs_poll(struct target *target);
 static int ppc476fs_halt(struct target *target);
 
+// ??? 
 static int to_halt_state(struct target *target)
 {
 	int ret = ppc476fs_poll(target);
@@ -1065,18 +1147,35 @@ static int to_halt_state(struct target *target)
 static int examine_internal(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	struct breakpoint *bp;
+	uint32_t JDSR_value;
+	bool is_running;
 	int ret;
 
-	ret = to_halt_state(target);
-	if (ret != ERROR_OK) {
-		LOG_ERROR("Device halt error (error code = %i)", ret);
+	ret = read_JDSR(target, &JDSR_value); // supposedly can return a wrong result
+	if (ret != ERROR_OK)
 		return ret;
+	ret = read_JDSR(target, &JDSR_value); // repeat reading
+	if (ret != ERROR_OK)
+		return ret;
+
+	is_running = ((JDSR_value & JDSR_PSP_MASK) == 0);
+
+	// stop the target if it is running
+	if (is_running) {
+		ret = write_JDCR(target, JDCR_STO_MASK);
+		if (ret != ERROR_OK)
+			return ret;
 	}
+
+	ret = save_state(target);
+	if (ret != ERROR_OK)
+		return ret;
 
 	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
 	if (ret != ERROR_OK)
 		return ret;
+	break_points_invalidate(target);
+
 	ret = write_spr_reg(target, SPR_REG_NUM_DBCR1, 0);
 	if (ret != ERROR_OK)
 		return ret;
@@ -1085,21 +1184,19 @@ static int examine_internal(struct target *target)
 		return ret;
 
 	// restore R31
-	if (!ppc476fs->gpr_regs[31]->dirty) {
-		ret = write_gpr_reg(target, 31, get_reg_value_32(ppc476fs->gpr_regs[31]));
-		if (ret != ERROR_OK)
-			return ret;
-	}
+	ret = write_gpr_reg(target, 31, ppc476fs->saved_R31);
+	if (ret != ERROR_OK)
+		return ret;
 
 	ret = clear_DBSR(target);
 	if (ret != ERROR_OK)
 		return ret;
 
-	// clear breakpoints status
-	bp = target->breakpoints;
-	while (bp != NULL) {
-		bp->set = 0;
-		bp = bp->next;
+	// run the target if it was ranning before
+	if (is_running) {
+		ret = write_JDCR(target, 0);
+		if (ret != ERROR_OK)
+			return ret;
 	}
 
 	return ERROR_OK;
@@ -1124,13 +1221,10 @@ static int ppc476fs_poll(struct target *target)
 		target->state = TARGET_RUNNING;
 
 	if ((prev_state != TARGET_HALTED) && (target->state == TARGET_HALTED)) {
-		regs_status_invalidate(target);
-		ret = read_required_gen_regs(target);
+		ret = save_state(target);
 		if (ret != ERROR_OK)
 			return ret;
-		ret = read_required_fpu_regs(target);
-		if (ret != ERROR_OK)
-			return ret;
+
 		ret = read_spr_reg(target, SPR_REG_NUM_DBSR, &DBSR_value);
 		if (ret != ERROR_OK)
 			return ret;
@@ -1233,7 +1327,100 @@ static int ppc476fs_step(struct target *target, int current, target_addr_t addre
 	return ERROR_OK;
 }
 
-int ppc476fs_get_gdb_reg_list(struct target *target, struct reg **reg_list[], int *reg_list_size, enum target_register_class reg_class)
+static int ppc476fs_assert_reset(struct target *target)
+{
+	if (target->reset_halt) {
+		LOG_ERROR("Device does not support 'reset halt' command");
+		return ERROR_FAIL;
+	}
+
+	return ERROR_OK;
+}
+
+static int ppc476fs_deassert_reset(struct target *target)
+{
+	int ret;
+
+	target->state = TARGET_RESET;
+	regs_status_invalidate(target);
+	break_points_invalidate(target);
+
+	ret = write_JDCR(target, JDCR_RESET_MASK);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+static int ppc476fs_soft_reset_halt(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	uint32_t value_JDSR;
+	int i;
+	int ret;
+	
+	target->state = TARGET_RESET;
+	regs_status_invalidate(target);
+	break_points_invalidate(target);
+
+	ret = write_JDCR(target, JDCR_RESET_MASK);
+	if (ret != ERROR_OK)
+		return ret;
+
+	for (i = 0; i < 100; ++i) {
+		ret = write_JDCR(target, JDCR_STO_MASK);
+		if (ret != ERROR_OK)
+			return ret;
+
+		ret = read_JDSR(target, &value_JDSR);
+		if (ret != ERROR_OK)
+			return ret;
+
+		if ((value_JDSR & JDSR_PSP_MASK) != 0)
+			break;
+	}
+
+	if ((value_JDSR & JDSR_PSP_MASK) == 0)
+		return ERROR_FAIL;
+
+	ret = save_state(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore a register state after the reset
+	set_reg_value_32(ppc476fs->PC_reg, 0xFFFFFFC);
+	ppc476fs->PC_reg->dirty = true;
+	set_reg_value_32(ppc476fs->MSR_reg, 0);
+	ppc476fs->MSR_reg->dirty = true;
+	// [***] other register must be restored - otherwise the soft reset does not work
+
+	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_spr_reg(target, SPR_REG_NUM_DBCR1, 0);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_spr_reg(target, SPR_REG_NUM_DBCR2, 0);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R31
+	ret = write_gpr_reg(target, 31, ppc476fs->saved_R31);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = clear_DBSR(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = restore_state(target);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+static int ppc476fs_get_gdb_reg_list(struct target *target, struct reg **reg_list[], int *reg_list_size, enum target_register_class reg_class)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); 
 
@@ -1303,14 +1490,14 @@ static int ppc476fs_read_memory(struct target *target, target_addr_t address, ui
 		address += size;
 	}
 
-	// restore R1
+	// restore R1 ???? !!!!
 	if (!ppc476fs->gpr_regs[1]->dirty) {
 		ret = write_gpr_reg(target, 1, get_reg_value_32(ppc476fs->gpr_regs[1]));
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
-	// restore R0
+	// restore R0 ???? !!!!
 	if (!ppc476fs->gpr_regs[0]->dirty) {
 		ret = write_gpr_reg(target, 0, get_reg_value_32(ppc476fs->gpr_regs[0]));
 		if (ret != ERROR_OK)
@@ -1373,14 +1560,14 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 		address += size;
 	}
 
-	// restore R1
+	// restore R1 ???? !!!!
 	if (!ppc476fs->gpr_regs[1]->dirty) {
 		ret = write_gpr_reg(target, 1, get_reg_value_32(ppc476fs->gpr_regs[1]));
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
-	// restore R0
+	// restore R0 ???? !!!!
 	if (!ppc476fs->gpr_regs[0]->dirty) {
 		ret = write_gpr_reg(target, 0, get_reg_value_32(ppc476fs->gpr_regs[0]));
 		if (ret != ERROR_OK)
@@ -1409,7 +1596,7 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 	if (bp_count == 4)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 
-	ret = to_halt_state(target);
+	ret = to_halt_state(target); // ??? may be wrong code
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1425,7 +1612,7 @@ static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *
 	if (breakpoint->set == 0)
 		return ERROR_OK;
 
-	ret = to_halt_state(target);
+	ret = to_halt_state(target); // ??? may be wrong code
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1450,7 +1637,7 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 	target->arch_info = ppc476fs;
 
 	if ((target->coreid < 0) || (target->coreid > 1)) {
-		LOG_ERROR("CoreID=%i is not allowed. It must be from 0 or 1. It has been set to 0.", target->coreid);
+		LOG_ERROR("CoreID=%i is not allowed. It must be 0 or 1. It has been set to 0.", target->coreid);
 		target->coreid = 0;
 	}
 
@@ -1561,6 +1748,10 @@ struct target_type ppc476fs_target = {
 	.halt = ppc476fs_halt,
 	.resume = ppc476fs_resume,
 	.step = ppc476fs_step,
+
+	.assert_reset = ppc476fs_assert_reset,
+	.deassert_reset = ppc476fs_deassert_reset,
+	.soft_reset_halt = ppc476fs_soft_reset_halt,
 
 	.get_gdb_reg_list = ppc476fs_get_gdb_reg_list,
 
