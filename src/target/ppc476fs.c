@@ -9,6 +9,15 @@
 #include <target/breakpoints.h>
 #include <helper/log.h>
 
+// uncomment the lines below to see the debug messages without turning on a debug mode
+/* #undef LOG_DEBUG
+#define LOG_DEBUG(expr ...) \
+	do { \
+		printf("D:%i:%s: ", __LINE__, __func__); \
+		printf(expr); \
+		printf("\n"); \
+	} while (0)*/
+
 // jtag instruction codes without core ids
 #define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
 #define JTAG_INSTR_WRITE_JISB_READ_JDSR 0x38 /* 0b0111000 */
@@ -1280,6 +1289,8 @@ static int ppc476fs_poll(struct target *target)
 	uint32_t JDSR_value, DBSR_value;
 	int ret;
 
+	// LOG_DEBUG("CoreID: %i, cores %i %i", target->coreid, target->gdb_service->core[0], target->gdb_service->core[1]);
+
 	ret = read_JDSR(target, &JDSR_value);
 	if (ret != ERROR_OK) {
 		target->state = TARGET_UNKNOWN;
@@ -1341,7 +1352,7 @@ static int ppc476fs_halt(struct target *target)
 {
 	int ret;
 
-	LOG_DEBUG("ppc476fs_halt, CoreID: %i", target->coreid);
+	LOG_DEBUG("CoreID: %i", target->coreid);
 
 	if (target->state == TARGET_HALTED) {
 		LOG_WARNING("target was already halted");
@@ -1362,6 +1373,8 @@ static int ppc476fs_halt(struct target *target)
 
 static int ppc476fs_resume(struct target *target, int current, target_addr_t address, int handle_breakpoints, int debug_execution)
 {
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	int ret = restore_state_before_run(target, current, address, DBG_REASON_NOTHALTED);
 	if (ret != ERROR_OK)
 		return ret;
@@ -1384,6 +1397,8 @@ static int ppc476fs_resume(struct target *target, int current, target_addr_t add
 
 static int ppc476fs_step(struct target *target, int current, target_addr_t address, int handle_breakpoints)
 {
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	int ret = restore_state_before_run(target, current, address, DBG_REASON_SINGLESTEP);
 	if (ret != ERROR_OK)
 		return ret;
@@ -1400,6 +1415,8 @@ static int ppc476fs_step(struct target *target, int current, target_addr_t addre
 
 static int ppc476fs_assert_reset(struct target *target)
 {
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	if (target->reset_halt) {
 		LOG_ERROR("Device does not support 'reset halt' command");
 		return ERROR_FAIL;
@@ -1411,6 +1428,8 @@ static int ppc476fs_assert_reset(struct target *target)
 static int ppc476fs_deassert_reset(struct target *target)
 {
 	int ret;
+
+	LOG_DEBUG("CoreID: %i", target->coreid);
 
 	ret = reset_and_halt(target);
 	if (ret != ERROR_OK)
@@ -1434,6 +1453,8 @@ static int ppc476fs_soft_reset_halt(struct target *target)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 	
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	ret = reset_and_halt(target);
 	if (ret != ERROR_OK)
 		return ret;
@@ -1474,6 +1495,8 @@ static int ppc476fs_read_memory(struct target *target, target_addr_t address, ui
 	uint32_t j;
 	uint32_t value;
 	int ret;
+
+	LOG_DEBUG("CoreID: %i, address: 0x%lX, size: %u, count: 0x%X", target->coreid, address, size, count);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
@@ -1546,6 +1569,8 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 	uint32_t value;
 	int ret;
 
+	LOG_DEBUG("CoreID: %i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
+
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
@@ -1607,6 +1632,8 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 	struct breakpoint *bp;
 	int bp_count;
 
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
@@ -1633,6 +1660,8 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
 	int ret;
+
+	LOG_DEBUG("CoreID: %i", target->coreid);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
@@ -1664,6 +1693,8 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 	struct ppc476fs_common *ppc476fs = calloc(1, sizeof(struct ppc476fs_common));
 	target->arch_info = ppc476fs;
 
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	if ((target->coreid < 0) || (target->coreid > 1)) {
 		LOG_ERROR("CoreID=%i is not allowed. It must be 0 or 1. It has been set to 0.", target->coreid);
 		target->coreid = 0;
@@ -1674,6 +1705,8 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 
 static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *target)
 {
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
 	build_reg_caches(target);
 
 	if (target->tap->priv == NULL) {
@@ -1691,7 +1724,11 @@ static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *
 
 static int ppc476fs_examine(struct target *target)
 {
-	int ret = examine_internal(target);
+	int ret;
+
+	LOG_DEBUG("CoreID: %i", target->coreid);
+
+	ret = examine_internal(target);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("Device has not been examined (error code = %i)", ret);
 		return ret;
