@@ -8,6 +8,7 @@
 #include <target/register.h>
 #include <target/breakpoints.h>
 #include <helper/log.h>
+#include <helper/time_support.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
 /* #undef LOG_DEBUG
@@ -39,6 +40,7 @@
 #define SPR_REG_NUM_DBCR2 310
 #define SPR_REG_NUM_DBSR 304
 #define SPR_REG_NUM_IAC_BASE 312 /* IAC1..IAC4 */
+#define SPR_REG_NUM_MMUCR 946
 
 #define DBCR0_EDM_MASK (1 << (63 - 32))
 #define DBCR0_IAC1_MASK (1 << (63 - 40))
@@ -58,6 +60,8 @@
 
 #define MSR_FP_MASK (1 << (63 - 50))
 
+#define MMUCR_STID_MASK (0xFFFF << 0)
+
 #define ALL_REG_COUNT 71
 #define GDB_REG_COUNT 71 /* at start of all register array */
 #define GEN_CACHE_REG_COUNT 38 /* R0-R31, PC, MSR, CR, LR, CTR, XER */
@@ -69,6 +73,8 @@
 #define MAGIC_RANDOM_VALUE_2 0x44692D7E
 
 #define ERROR_MEMORY_AT_STACK (-99)
+
+#define TLB_NUMBER 1024
 
 struct ppc476fs_common {
 	struct reg *all_regs[ALL_REG_COUNT];
@@ -90,6 +96,26 @@ struct ppc476fs_common {
 
 struct ppc476fs_tap_ext {
 	int last_coreid; // -1 if the last core id is unknown
+};
+
+struct tlb_record {
+	int index;
+	int way;
+	unsigned tid;
+	uint32_t epn;
+	int v;
+	int ts;
+	unsigned dsiz; // bit mask
+	bool bolted;
+	uint32_t erpn;
+	uint32_t rpn;
+	unsigned wimg;
+	int en; // 0 - BE, 1 - LE
+	int il1i;
+	int il1d;
+	unsigned u;
+	unsigned uxwr;
+	unsigned sxwr;
 };
 
 static int ppc476fs_get_gen_reg(struct reg *reg);
@@ -1282,6 +1308,150 @@ static int examine_internal(struct target *target)
 	return ERROR_OK;
 }
 
+// the target must be halted
+// all UTLB are read without any sort
+static int load_all_tlb(struct target *target, struct tlb_record records[TLB_NUMBER])
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int64_t start_time = timeval_ms();
+	int64_t current_time;
+	int i;
+	int index;
+	int way;
+	uint32_t mmucr_saved;
+	uint32_t mmucr_value;
+	uint32_t r1_value;
+	uint32_t r2_value;
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	// save MMUCR
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &mmucr_saved);
+	if (ret != ERROR_OK)
+		return ret;
+
+	for (i = 0; i < TLB_NUMBER; ++i) {
+		current_time = timeval_ms();
+		if (current_time - start_time > 500) {
+			keep_alive();
+			start_time = current_time;
+		}
+
+		index = i >> 2;
+		way = i & 0x3;
+		records[i].index = index;
+		records[i].way = way;
+
+		r2_value = (index << 16) | (way << 29);
+		ret = write_gpr_reg(target, 2, r2_value);
+		if (ret != ERROR_OK)
+			return ret;
+
+		ret = stuff_code(target, 0x7C220764); // tlbre R1, R2, 0
+		if (ret != ERROR_OK)
+			return ret;
+		ret = read_gpr_reg(target, 1, &r1_value);
+		if (ret != ERROR_OK)
+			return ret;
+		records[i].epn = (r1_value >> 12) & 0xFFFFF; // [12:31]
+		records[i].v = (r1_value >> 11) & 0x1; // [11]
+		records[i].ts = (r1_value >> 10) & 0x1; // [10]
+		records[i].dsiz = (r1_value >> 4) & 0x3F; // [4:9]
+		records[i].bolted = (r1_value >> 3) & 0x1; // [3]
+
+		ret = stuff_code(target, 0x7C220F64); // tlbre R1, R2, 1
+		if (ret != ERROR_OK)
+			return ret;
+		ret = read_gpr_reg(target, 1, &r1_value);
+		if (ret != ERROR_OK)
+			return ret;
+		records[i].rpn = (r1_value >> 12) & 0xFFFFF; // [12:31]
+		records[i].erpn = (r1_value >> 0) & 0x3FF; // [0:9]
+
+		ret = stuff_code(target, 0x7C221764); // tlbre R1, R2, 2
+		if (ret != ERROR_OK)
+			return ret;
+		ret = read_gpr_reg(target, 1, &r1_value);
+		if (ret != ERROR_OK)
+			return ret;
+		records[i].il1i = (r1_value >> 17) & 0x1; // [17]
+		records[i].il1d = (r1_value >> 16) & 0x1; // [16]
+		records[i].u = (r1_value >> 12) & 0xF; // [12:15]
+		records[i].wimg = (r1_value >> 8) & 0xF; // [8:11]
+		records[i].en = (r1_value >> 7) & 0x1; // [7]
+		records[i].uxwr = (r1_value >> 3) & 0x7; // [3:5]
+		records[i].sxwr = (r1_value >> 0) & 0x7; // [0:2]
+
+		ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &mmucr_value);
+		if (ret != ERROR_OK)
+			return ret;
+		records[i].tid = mmucr_value & MMUCR_STID_MASK;
+	}
+
+	// restore MMUCR
+	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, mmucr_saved);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R1
+	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+static int tlr_record_compar(const void *p1, const void *p2)
+{
+	const struct tlb_record *r1 = p1;
+	const struct tlb_record *r2 = p2;
+
+	if (r1->tid < r2->tid)
+		return -1;
+	if (r1->tid > r2->tid)
+		return 1;
+
+	if (r1->ts < r2->ts)
+		return -1;
+	if (r1->ts > r2->ts)
+		return 1;
+
+	if (r1->epn < r2->epn)
+		return -1;
+	if (r1->epn > r2->epn)
+		return 1;
+
+	return 0;
+}
+
+static const char *dsiz_to_string(unsigned dsiz)
+{
+	switch (dsiz) {
+		case 0x00:
+			return "4k";
+		case 0x01:
+			return "16k";
+		case 0x03:
+			return "64k";
+		case 0x07:
+			return "1m";
+		case 0x0F:
+			return "16m";
+		case 0x1F:
+			return "256m";
+		case 0x3F:
+			return "1g";
+	}
+
+	return "?";
+}
+
 static int ppc476fs_poll(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -1739,6 +1909,66 @@ static int ppc476fs_examine(struct target *target)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(ppc476fs_handle_tlb_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	struct tlb_record records[TLB_NUMBER];
+	char buffer[256];
+	int i;
+	int record_count;
+	int ret;
+
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	ret = load_all_tlb(target, records);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("cannot read UTLB: %i", ret);
+		return ret;
+	}
+
+	keep_alive();
+
+	// process only valid records
+	record_count = 0;
+	for (i = 0; i < TLB_NUMBER; ++i) {
+		if (records[i].v)
+			records[record_count++] = records[i];
+	}
+
+	qsort(records, record_count, sizeof(struct tlb_record), tlr_record_compar);
+
+	command_print(CMD, "TID  TS   EPN   V  DSIZ ERPN  RPN  WIMG EN IL1I IL1D U UXWR SXWR  IW");
+	for (i = 0; i < record_count; ++i) {
+		sprintf(buffer, "%04X  %i %1s%05X  %i  %4s  %03X %05X   %X  %2s  %i    %i   %X   %X    %X  %02X%i",
+			records[i].tid,
+			records[i].ts,
+			records[i].bolted ? "*" : "",
+			records[i].epn,
+			records[i].v,
+			dsiz_to_string(records[i].dsiz),
+			records[i].erpn,
+			records[i].rpn,
+			records[i].wimg,
+			records[i].en == 0 ? "BE" : "LE",
+			records[i].il1i,
+			records[i].il1d,
+			records[i].u,
+			records[i].uxwr,
+			records[i].sxwr,
+			records[i].index,
+			records[i].way);
+		command_print(CMD, "%s", buffer);
+	}
+
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(ppc476fs_handle_status_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
@@ -1786,6 +2016,13 @@ COMMAND_HANDLER(ppc476fs_handle_jtag_speed_command)
 }
 
 static const struct command_registration ppc476fs_exec_command_handlers[] = {
+	{
+		.name = "tlb",
+		.handler = ppc476fs_handle_tlb_command,
+		.mode = COMMAND_EXEC,
+		.usage = "tlb",
+		.help = "dump all valid UTLB records"
+	},
 	{
 		.name = "status",
 		.handler = ppc476fs_handle_status_command,
