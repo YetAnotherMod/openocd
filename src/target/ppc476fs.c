@@ -9,6 +9,7 @@
 #include <target/breakpoints.h>
 #include <helper/log.h>
 #include <helper/time_support.h>
+#include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
 /* #undef LOG_DEBUG
@@ -76,6 +77,46 @@
 
 #define TLB_NUMBER 1024
 
+#define TLB_0_EPN_BIT_POS 12
+#define TLB_0_EPN_BIT_LEN 20
+#define TLB_0_V_MASK BIT(11)
+#define TLB_0_TS_MASK BIT(10)
+#define TLB_0_DSIZ_BIT_POS 4
+#define TLB_0_DSIZ_BIT_LEN 6
+#define TLB_0_BLTD_MASK BIT(3)
+
+#define TLB_1_RPN_BIT_POS 12
+#define TLB_1_RPN_BIT_LEN 20
+#define TLB_1_ERPN_BIT_POS 0
+#define TLB_1_ERPN_BIT_LEN 10
+
+#define TLB_2_IL1I_MASK BIT(17)
+#define TLB_2_IL1D_MASK BIT(16)
+#define TLB_2_U_BIT_POS 12
+#define TLB_2_U_BIT_LEN 4
+#define TLB_2_WIMG_BIT_POS 8
+#define TLB_2_WIMG_BIT_LEN 4
+#define TLB_2_EN_MASK BIT(7)
+#define TLB_2_UXWR_BIT_POS 3
+#define TLB_2_UXWR_BIT_LEN 3
+#define TLB_2_SXWR_BIT_POS 0
+#define TLB_2_SXWR_BIT_LEN 3
+
+struct tlb_hw_record {
+	uint32_t data[3]; // if the 'valid' bit is zero, all other data are undefined
+	unsigned tid; // if the 'valid' bit is zero, the field is undefined
+};
+
+struct tlb_cached_record {
+	bool loaded;
+	struct tlb_hw_record hw;
+};
+
+struct tlb_sort_record {
+	int index_way;
+	struct tlb_hw_record hw;
+};
+
 struct ppc476fs_common {
 	struct reg *all_regs[ALL_REG_COUNT];
 	struct reg *gpr_regs[GPR_REG_COUNT];
@@ -92,30 +133,11 @@ struct ppc476fs_common {
 	uint32_t saved_R2;
 	uint32_t saved_LR;
 	uint64_t saved_F0;
+	struct tlb_cached_record tlb_cache[TLB_NUMBER];
 };
 
 struct ppc476fs_tap_ext {
 	int last_coreid; // -1 if the last core id is unknown
-};
-
-struct tlb_record {
-	int index;
-	int way;
-	unsigned tid;
-	uint32_t epn;
-	int v;
-	int ts;
-	unsigned dsiz; // bit mask
-	bool bolted;
-	uint32_t erpn;
-	uint32_t rpn;
-	unsigned wimg;
-	int en; // 0 - BE, 1 - LE
-	int il1i;
-	int il1d;
-	unsigned u;
-	unsigned uxwr;
-	unsigned sxwr;
 };
 
 static int ppc476fs_get_gen_reg(struct reg *reg);
@@ -137,6 +159,11 @@ static const struct reg_arch_type ppc476fs_fpu_reg_type = {
 static const uint32_t coreid_mask[4] = {
 	0x5, 0x6
 };
+
+static inline uint32_t get_bits_32(uint32_t value, unsigned pos, unsigned len)
+{
+	return (value >> pos) & ((1U << len) - 1);
+}
 
 static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
 {
@@ -1134,11 +1161,21 @@ static void break_points_invalidate(struct target *target)
 	}
 }
 
+static void tlb_cache_invalidate(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int i;
+
+	for (i = 0; i < TLB_NUMBER; ++i)
+		ppc476fs->tlb_cache[i].loaded = false;
+}
+
 static int save_state(struct target *target)
 {
 	int ret;
 
 	regs_status_invalidate(target);
+	tlb_cache_invalidate(target);
 
 	ret = read_required_gen_regs(target);
 	if (ret != ERROR_OK)
@@ -1166,6 +1203,7 @@ static int restore_state(struct target *target)
 		return ret;
 
 	regs_status_invalidate(target);
+	tlb_cache_invalidate(target);
 
 	return ERROR_OK;
 }
@@ -1309,19 +1347,67 @@ static int examine_internal(struct target *target)
 }
 
 // the target must be halted
-// all UTLB are read without any sort
-static int load_all_tlb(struct target *target, struct tlb_record records[TLB_NUMBER])
+// the function uses R1, R2, MMUCR registers and does not restore them
+static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *hw)
+{
+	int index;
+	int way;
+	uint32_t r2_value;
+	uint32_t mmucr_value;
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	hw->data[0] = 0;
+	hw->data[1] = 0;
+	hw->data[2] = 0;
+	hw->tid = 0;
+
+	index = index_way >> 2;
+	way = index_way & 0x3;
+
+	r2_value = (index << 16) | (way << 29);
+	ret = write_gpr_reg(target, 2, r2_value);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = stuff_code(target, 0x7C220764); // tlbre R1, R2, 0
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 1, &hw->data[0]);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = stuff_code(target, 0x7C220F64); // tlbre R1, R2, 1
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 1, &hw->data[1]);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = stuff_code(target, 0x7C221764); // tlbre R1, R2, 2
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 1, &hw->data[2]);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &mmucr_value);
+	if (ret != ERROR_OK)
+		return ret;
+	hw->tid = mmucr_value & MMUCR_STID_MASK;
+
+	return ERROR_OK;
+}
+
+// the target must be halted
+static int load_all_uncached_tlb(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int64_t start_time = timeval_ms();
 	int64_t current_time;
 	int i;
-	int index;
-	int way;
 	uint32_t mmucr_saved;
-	uint32_t mmucr_value;
-	uint32_t r1_value;
-	uint32_t r2_value;
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
@@ -1332,61 +1418,19 @@ static int load_all_tlb(struct target *target, struct tlb_record records[TLB_NUM
 		return ret;
 
 	for (i = 0; i < TLB_NUMBER; ++i) {
+		if (ppc476fs->tlb_cache[i].loaded)
+			continue;
+
 		current_time = timeval_ms();
 		if (current_time - start_time > 500) {
 			keep_alive();
 			start_time = current_time;
 		}
 
-		index = i >> 2;
-		way = i & 0x3;
-		records[i].index = index;
-		records[i].way = way;
-
-		r2_value = (index << 16) | (way << 29);
-		ret = write_gpr_reg(target, 2, r2_value);
+		ret = load_tlb(target, i, &ppc476fs->tlb_cache[i].hw);
 		if (ret != ERROR_OK)
 			return ret;
-
-		ret = stuff_code(target, 0x7C220764); // tlbre R1, R2, 0
-		if (ret != ERROR_OK)
-			return ret;
-		ret = read_gpr_reg(target, 1, &r1_value);
-		if (ret != ERROR_OK)
-			return ret;
-		records[i].epn = (r1_value >> 12) & 0xFFFFF; // [12:31]
-		records[i].v = (r1_value >> 11) & 0x1; // [11]
-		records[i].ts = (r1_value >> 10) & 0x1; // [10]
-		records[i].dsiz = (r1_value >> 4) & 0x3F; // [4:9]
-		records[i].bolted = (r1_value >> 3) & 0x1; // [3]
-
-		ret = stuff_code(target, 0x7C220F64); // tlbre R1, R2, 1
-		if (ret != ERROR_OK)
-			return ret;
-		ret = read_gpr_reg(target, 1, &r1_value);
-		if (ret != ERROR_OK)
-			return ret;
-		records[i].rpn = (r1_value >> 12) & 0xFFFFF; // [12:31]
-		records[i].erpn = (r1_value >> 0) & 0x3FF; // [0:9]
-
-		ret = stuff_code(target, 0x7C221764); // tlbre R1, R2, 2
-		if (ret != ERROR_OK)
-			return ret;
-		ret = read_gpr_reg(target, 1, &r1_value);
-		if (ret != ERROR_OK)
-			return ret;
-		records[i].il1i = (r1_value >> 17) & 0x1; // [17]
-		records[i].il1d = (r1_value >> 16) & 0x1; // [16]
-		records[i].u = (r1_value >> 12) & 0xF; // [12:15]
-		records[i].wimg = (r1_value >> 8) & 0xF; // [8:11]
-		records[i].en = (r1_value >> 7) & 0x1; // [7]
-		records[i].uxwr = (r1_value >> 3) & 0x7; // [3:5]
-		records[i].sxwr = (r1_value >> 0) & 0x7; // [0:2]
-
-		ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &mmucr_value);
-		if (ret != ERROR_OK)
-			return ret;
-		records[i].tid = mmucr_value & MMUCR_STID_MASK;
+		ppc476fs->tlb_cache[i].loaded = true;
 	}
 
 	// restore MMUCR
@@ -1407,24 +1451,30 @@ static int load_all_tlb(struct target *target, struct tlb_record records[TLB_NUM
 	return ERROR_OK;
 }
 
-static int tlr_record_compar(const void *p1, const void *p2)
+static int tlb_record_compar(const void *p1, const void *p2)
 {
-	const struct tlb_record *r1 = p1;
-	const struct tlb_record *r2 = p2;
+	const struct tlb_sort_record *r1 = p1;
+	const struct tlb_sort_record *r2 = p2;
+	uint32_t v1;
+	uint32_t v2;
 
-	if (r1->tid < r2->tid)
+	if (r1->hw.tid < r2->hw.tid)
 		return -1;
-	if (r1->tid > r2->tid)
+	if (r1->hw.tid > r2->hw.tid)
 		return 1;
 
-	if (r1->ts < r2->ts)
+	v1 = r1->hw.data[0] & TLB_0_TS_MASK;
+	v2 = r2->hw.data[0] & TLB_0_TS_MASK;
+	if (v1 < v2)
 		return -1;
-	if (r1->ts > r2->ts)
+	if (v1 > v2)
 		return 1;
 
-	if (r1->epn < r2->epn)
+	v1 = get_bits_32(r1->hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN);
+	v2 = get_bits_32(r2->hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN);
+	if (v1 < v2)
 		return -1;
-	if (r1->epn > r2->epn)
+	if (v1 > v2)
 		return 1;
 
 	return 0;
@@ -1912,7 +1962,8 @@ static int ppc476fs_examine(struct target *target)
 COMMAND_HANDLER(ppc476fs_handle_tlb_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	struct tlb_record records[TLB_NUMBER];
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct tlb_sort_record records[TLB_NUMBER];
 	char buffer[256];
 	int i;
 	int record_count;
@@ -1926,7 +1977,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_command)
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	ret = load_all_tlb(target, records);
+	ret = load_all_uncached_tlb(target);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("cannot read UTLB: %i", ret);
 		return ret;
@@ -1937,32 +1988,34 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_command)
 	// process only valid records
 	record_count = 0;
 	for (i = 0; i < TLB_NUMBER; ++i) {
-		if (records[i].v)
-			records[record_count++] = records[i];
+		if ((ppc476fs->tlb_cache[i].hw.data[0] & TLB_0_V_MASK) != 0) {
+			records[record_count].index_way = i;
+			records[record_count++].hw = ppc476fs->tlb_cache[i].hw;
+		}
 	}
 
-	qsort(records, record_count, sizeof(struct tlb_record), tlr_record_compar);
+	qsort(records, record_count, sizeof(struct tlb_sort_record), tlb_record_compar);
 
 	command_print(CMD, "TID  TS   EPN   V  DSIZ ERPN  RPN  WIMG EN IL1I IL1D U UXWR SXWR  IW");
 	for (i = 0; i < record_count; ++i) {
 		sprintf(buffer, "%04X  %i %1s%05X  %i  %4s  %03X %05X   %X  %2s  %i    %i   %X   %X    %X  %02X%i",
-			records[i].tid,
-			records[i].ts,
-			records[i].bolted ? "*" : "",
-			records[i].epn,
-			records[i].v,
-			dsiz_to_string(records[i].dsiz),
-			records[i].erpn,
-			records[i].rpn,
-			records[i].wimg,
-			records[i].en == 0 ? "BE" : "LE",
-			records[i].il1i,
-			records[i].il1d,
-			records[i].u,
-			records[i].uxwr,
-			records[i].sxwr,
-			records[i].index,
-			records[i].way);
+			records[i].hw.tid,
+			(int)((records[i].hw.data[0] & TLB_0_TS_MASK) != 0),
+			(records[i].hw.data[0] & TLB_0_BLTD_MASK) != 0 ? "*" : "",
+			get_bits_32(records[i].hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN),
+			(int)((records[i].hw.data[0] & TLB_0_V_MASK) != 0),
+			dsiz_to_string(get_bits_32(records[i].hw.data[0], TLB_0_DSIZ_BIT_POS, TLB_0_DSIZ_BIT_LEN)),
+			get_bits_32(records[i].hw.data[1], TLB_1_ERPN_BIT_POS, TLB_1_ERPN_BIT_LEN),
+			get_bits_32(records[i].hw.data[1], TLB_1_RPN_BIT_POS, TLB_1_RPN_BIT_LEN),
+			get_bits_32(records[i].hw.data[2], TLB_2_WIMG_BIT_POS, TLB_2_WIMG_BIT_LEN),
+			(records[i].hw.data[2] & TLB_2_EN_MASK) == 0 ? "BE" : "LE",
+			(int)((records[i].hw.data[2] & TLB_2_IL1I_MASK) != 0),
+			(int)((records[i].hw.data[2] & TLB_2_IL1D_MASK) != 0),
+			get_bits_32(records[i].hw.data[2], TLB_2_U_BIT_POS, TLB_2_U_BIT_LEN),
+			get_bits_32(records[i].hw.data[2], TLB_2_UXWR_BIT_POS, TLB_2_UXWR_BIT_LEN),
+			get_bits_32(records[i].hw.data[2], TLB_2_SXWR_BIT_POS, TLB_2_SXWR_BIT_LEN),
+			records[i].index_way >> 2,
+			records[i].index_way & 0x3);
 		command_print(CMD, "%s", buffer);
 	}
 
