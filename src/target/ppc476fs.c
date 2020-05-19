@@ -12,14 +12,13 @@
 #include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
-#undef LOG_DEBUG
+/* #undef LOG_DEBUG
 #define LOG_DEBUG(expr ...) \
 	do { \
 		printf("D:%i:%s: ", __LINE__, __func__); \
 		printf(expr); \
 		printf("\n"); \
-	} while (0)
-// ??? up
+	} while (0)*/
 
 // jtag instruction codes without core ids
 #define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
@@ -1432,6 +1431,53 @@ static int read_virt_mem(struct target *target, uint32_t address, uint32_t size,
 }
 
 // the target must be halted
+// the function uses R1, R2 registers and does not restore them
+static int write_virt_mem(struct target *target, uint32_t address, uint32_t size, const uint8_t *buffer)
+{
+	uint32_t code;
+	uint32_t value;
+	uint32_t i;
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	switch (size)
+	{
+	case 1:
+		code = 0x98410000; // stb %R2, 0(%R1)
+		break;
+	case 2:
+		code = 0xB0410000; // sth %R2, 0(%R1)
+		break;
+	case 4:
+		code = 0x90410000; // stw %R2, 0(%R1)
+		break;
+	default:
+		assert(false);
+	}
+
+	ret = write_gpr_reg(target, 1, address);
+	if (ret != ERROR_OK)
+		return ret;
+
+	value = 0;
+	for (i = 0; i < size; ++i)
+	{
+		value <<= 8;
+		value |= (uint32_t)*(buffer++);
+	}
+
+	ret = write_gpr_reg(target, 2, value);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+// the target must be halted
 // the function uses R1, R2, MMUCR registers and does not restore them
 static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *hw)
 {
@@ -2025,10 +2071,7 @@ static int ppc476fs_read_memory(struct target *target, target_addr_t address, ui
 static int ppc476fs_write_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	uint32_t code;
 	uint32_t i;
-	uint32_t j;
-	uint32_t value;
 	int ret;
 
 	LOG_DEBUG("CoreID: %i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
@@ -2042,38 +2085,13 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u)))
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
-	switch (size)
-	{
-	case 1:
-		code = 0x98410000; // stb %R2, 0(%R1)
-		break;
-	case 2:
-		code = 0xB0410000; // sth %R2, 0(%R1)
-		break;
-	case 4:
-		code = 0x90410000; // stw %R2, 0(%R1)
-		break;
-	default:
-		assert(false);
-	}
-
 	for (i = 0; i < count; ++i) {
-		ret = write_gpr_reg(target, 1, (uint32_t)address);
+		ret = write_virt_mem(target, (uint32_t)address, size, buffer);
 		if (ret != ERROR_OK)
 			return ret;
-		value = 0;
-		for (j = 0; j < size; ++j)
-		{
-			value <<= 8;
-			value |= (uint32_t)*(buffer++);
-		}
-		ret = write_gpr_reg(target, 2, value);
-		if (ret != ERROR_OK)
-			return ret;
-		ret = stuff_code(target, code);
-		if (ret != ERROR_OK)
-			return ret;
+
 		address += size;
+		buffer += size;
 	}
 
 	// restore R1
@@ -2261,15 +2279,10 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
 static int ppc476fs_write_phys_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
-	//
-	// ???
-	//
-
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	uint32_t code;
+	struct phys_mem_state state;
+	uint32_t last_ERPN_RPN = -1; // not setuped yet 
+	uint32_t new_ERPN_RPN;
 	uint32_t i;
-	uint32_t j;
-	uint32_t value;
 	int ret;
 
 	LOG_DEBUG("CoreID: %i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
@@ -2283,51 +2296,33 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u)))
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
-	switch (size)
-	{
-	case 1:
-		code = 0x98410000; // stb %R2, 0(%R1)
-		break;
-	case 2:
-		code = 0xB0410000; // sth %R2, 0(%R1)
-		break;
-	case 4:
-		code = 0x90410000; // stw %R2, 0(%R1)
-		break;
-	default:
-		assert(false);
-	}
+	ret = phys_mem_init(target, &state);
+	if (ret != ERROR_OK)
+		return ret;
 
 	for (i = 0; i < count; ++i) {
-		ret = write_gpr_reg(target, 1, (uint32_t)address);
-		if (ret != ERROR_OK)
-			return ret;
-		value = 0;
-		for (j = 0; j < size; ++j)
-		{
-			value <<= 8;
-			value |= (uint32_t)*(buffer++);
+		new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
+		if (new_ERPN_RPN != last_ERPN_RPN) {
+			ret = phys_mem_access(target, new_ERPN_RPN);
+			if (ret != ERROR_OK)
+				return ret;
+			last_ERPN_RPN = new_ERPN_RPN;
 		}
-		ret = write_gpr_reg(target, 2, value);
+
+		ret = write_virt_mem(target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size, buffer);
 		if (ret != ERROR_OK)
 			return ret;
-		ret = stuff_code(target, code);
-		if (ret != ERROR_OK)
-			return ret;
+
 		address += size;
+		buffer += size;
 	}
 
-	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	// restore state
+	ret = phys_mem_restore(target, &state);
 	if (ret != ERROR_OK)
 		return ret;
 
-	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
-	if (ret != ERROR_OK)
-		return ret;
-
-	return ERROR_OK;	
+	return ERROR_OK;
 }
 
 static int ppc476fs_mmu(struct target *target, int *enabled)
