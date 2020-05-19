@@ -220,42 +220,48 @@ static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
 static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
 {
 	struct ppc476fs_tap_ext *tap_ext = target_to_ppc476fs_tap_ext(target);
-	struct scan_field field;
-	struct scan_field fields[2];
+	struct scan_field instr_field;
 	uint8_t instr_buffer[4];
-	uint8_t data_out_buffer[4];
-	uint8_t data_in_buffer[4];
-	uint8_t valid_buffer[4];
+	struct scan_field data_fields[1];
+	uint8_t data_out_buffer[8];
+	uint8_t data_in_buffer[8];
+	uint64_t zeros = 0;
 	int ret;
 
 	// !!! IMPORTANT
 	// prevent the JTAG core switching bug
 	if (tap_ext->last_coreid != target->coreid) {
 		buf_set_u32(instr_buffer, 0, target->tap->ir_length, JTAG_INSTR_CORE_RELOAD | coreid_mask[target->coreid]);
-		field.num_bits = target->tap->ir_length;
-		field.out_value = instr_buffer;
-		field.in_value = NULL;
-		jtag_add_ir_scan(target->tap, &field, TAP_IDLE);
+		instr_field.num_bits = target->tap->ir_length;
+		instr_field.out_value = instr_buffer;
+		instr_field.in_value = NULL;
+		jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
 		tap_ext->last_coreid = target->coreid;
 	}
 
 	buf_set_u32(instr_buffer, 0, target->tap->ir_length, instr_without_coreid | coreid_mask[target->coreid]);
-	field.num_bits = target->tap->ir_length;
-	field.out_value = instr_buffer;
-	field.in_value = NULL;
-	jtag_add_ir_scan(target->tap, &field, TAP_IDLE);
+	instr_field.num_bits = target->tap->ir_length;
+	instr_field.out_value = instr_buffer;
+	instr_field.in_value = NULL;
+	jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
 
 	buf_set_u32(data_out_buffer, 0, 32, write_data);
-	fields[0].num_bits = 32;
-	fields[0].out_value = data_out_buffer;
-	fields[0].in_value = data_in_buffer;
+	buf_set_u32(data_out_buffer, 32, 1, valid_bit);
+	data_fields[0].num_bits = 33;
+	data_fields[0].out_value = data_out_buffer;
+	data_fields[0].in_value = data_in_buffer;
+	jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
 
-	buf_set_u32(valid_buffer, 0, 1, valid_bit);
-	fields[1].num_bits = 1;
-	fields[1].out_value = valid_buffer;
-	fields[1].in_value = NULL;
+	// !!! IMPORTANT
+	// make additional request with valid bit == 0
+	// to correct a JTAG communication BUG
+	if (valid_bit != 0) {
+		jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
+		data_fields[0].out_value = (uint8_t*)zeros;
+		data_fields[0].in_value = NULL;
+		jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
+	}
 
-	jtag_add_dr_scan(target->tap, 2, fields, TAP_IDLE);
 	ret = jtag_execute_queue();
 	if (ret != ERROR_OK)
 		return ret;
@@ -279,13 +285,6 @@ static int write_JDCR(struct target *target, uint32_t data)
 	if (ret != ERROR_OK)
 		return ret;
 
-	// !!! IMPORTANT
-	// make additional write_JDCR/read_JDSR request with valid bit == 0
-	// to correct a JTAG communication BUG
-	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 0, 0, NULL);
-	if (ret != ERROR_OK)
-		return ret;
-
 	return ERROR_OK;
 }
 
@@ -294,13 +293,6 @@ static int stuff_code(struct target *target, uint32_t code)
 	int ret;
 
 	ret =  jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// !!! IMPORTANT
-	// make additional write_JISB/read_JDSR request with valid bit == 0
-	// to correct a JTAG communication BUG
-	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 0, 0, NULL);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -317,13 +309,6 @@ static int write_DBDR(struct target *target, uint32_t data)
 	int ret;
 
 	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 1, data, NULL);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// !!! IMPORTANT
-	// make additional write_DBDR/read_DBDR request with valid bit == 0
-	// to correct a JTAG communication BUG
-	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 0, 0, NULL);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2336,6 +2321,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_command)
 	struct target *target = get_current_target(CMD_CTX);
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct tlb_sort_record records[TLB_NUMBER];
+	int64_t start_time = timeval_ms();
 	char buffer[256];
 	uint32_t value_SSPCR;
 	uint32_t value_USPCR;
@@ -2400,6 +2386,8 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_command)
 		command_print(CMD, "%s", buffer);
 	}
 	command_print(CMD, "SSPCR = 0x%08X, USPCR = 0x%08X", value_SSPCR, value_USPCR);
+
+	LOG_DEBUG("Execution time: %li ms", timeval_ms() - start_time);
 
 	return ERROR_OK;
 }
