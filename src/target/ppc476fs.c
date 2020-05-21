@@ -1604,38 +1604,6 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	return ERROR_OK;
 }
 
-// the target must be halted
-// the function uses R1, R2, MMUCR registers and does not restore them
-// end_index_way - exclusive
-static int load_uncached_tlbs(struct target *target, int start_index_way, int end_index_way)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	int64_t start_time = timeval_ms();
-	int64_t current_time;
-	int index_way;
-	int ret;
-
-	assert(target->state == TARGET_HALTED);
-
-	for (index_way = start_index_way; index_way < end_index_way; ++index_way) {
-		if (ppc476fs->tlb_cache[index_way].loaded)
-			continue;
-
-		current_time = timeval_ms();
-		if (current_time - start_time > 500) {
-			keep_alive();
-			start_time = current_time;
-		}
-
-		ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
-		if (ret != ERROR_OK)
-			return ret;
-		ppc476fs->tlb_cache[index_way].loaded = true;
-	}
-
-	return ERROR_OK;
-}
-
 static int tlb_record_compar(const void *p1, const void *p2)
 {
 	const struct tlb_sort_record *r1 = p1;
@@ -1717,6 +1685,7 @@ static void print_tlb_table_record(struct command_invocation *cmd, int index_way
 
 static int phys_mem_init(struct target *target, struct phys_mem_state *state)
 {
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 
 	ret = stuff_code(target, 0x7C4000A6); // mfmsr R2
@@ -1747,9 +1716,12 @@ static int phys_mem_init(struct target *target, struct phys_mem_state *state)
 		return ret;
 
 	// load TLB record
-	ret = load_uncached_tlbs(target, PHYS_MEM_TLB_INDEX_WAY, PHYS_MEM_TLB_INDEX_WAY + 1);
-	if (ret != ERROR_OK)
-		return ret;
+	if (!ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].loaded) {
+		ret = load_tlb(target, PHYS_MEM_TLB_INDEX_WAY, &ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].hw);
+		if (ret != ERROR_OK)
+			return ret;
+		ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].loaded = true;
+	}
 
 	// set PID
 	ret = write_spr_reg(target, SPR_REG_NUM_PID, PHYS_MEM_MAGIC_PID);
@@ -1972,6 +1944,210 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[], struct tl
 		if (ret != ERROR_OK)
 			return ret;		
 	}
+
+	return ERROR_OK;
+}
+
+static int handle_tlb_dump_command_internal(struct command_invocation *cmd, struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct tlb_sort_record records[TLB_NUMBER];
+	int64_t start_time = timeval_ms();
+	int64_t current_time;
+	uint32_t saved_MMUCR;
+	uint32_t value_SSPCR;
+	uint32_t value_USPCR;
+	int i;
+	int record_count;
+	int ret;
+
+	// save MMUCR
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// load uncached TLBs
+	for (i = 0; i < TLB_NUMBER; ++i) {
+		if (ppc476fs->tlb_cache[i].loaded)
+			continue;
+		current_time = timeval_ms();
+		if (current_time - start_time > 500) {
+			keep_alive();
+			start_time = current_time;
+		}
+		ret = load_tlb(target, i, &ppc476fs->tlb_cache[i].hw);
+		if (ret != ERROR_OK)
+			return ret;
+		ppc476fs->tlb_cache[i].loaded = true;
+	}
+
+	ret = read_spr_reg(target, SPR_REG_NUM_SSPCR, &value_SSPCR);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_spr_reg(target, SPR_REG_NUM_USPCR, &value_USPCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore MMUCR
+	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R1
+	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// process only valid records
+	record_count = 0;
+	for (i = 0; i < TLB_NUMBER; ++i) {
+		if ((ppc476fs->tlb_cache[i].hw.data[0] & TLB_0_V_MASK) != 0) {
+			records[record_count].index_way = i;
+			records[record_count++].hw = ppc476fs->tlb_cache[i].hw;
+		}
+	}
+
+	qsort(records, record_count, sizeof(struct tlb_sort_record), tlb_record_compar);
+
+	print_tlb_table_header(CMD);
+	for (i = 0; i < record_count; ++i) {
+		print_tlb_table_record(CMD, records[i].index_way, &records[i].hw);
+	}
+	command_print(CMD, "SSPCR = 0x%08X, USPCR = 0x%08X", value_SSPCR, value_USPCR);
+
+	return ERROR_OK;
+}
+
+static int handle_tlb_create_command_internal(struct command_invocation *cmd, struct target *target, struct tlb_command_params *params)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct tlb_hw_record hw;
+	uint32_t saved_MMUCR;
+	int index;
+	int way;
+	int index_way;
+	int ret;
+
+	// save MMUCR
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	switch (params->dsiz)
+	{
+	case DSIZ_4K:
+		index = (params->tid & 0xFF) ^ (params->epn & 0xFF) ^ ((params->epn >> 4) & 0xF0) ^ ((params->epn >> 12) & 0xFF);
+		break;
+	case DSIZ_16K:
+		index = (params->tid & 0xFF) ^ ((params->epn >> 2) & 0xFF) ^ ((params->epn >> 4) & 0xC0) ^ ((params->epn >> 12) & 0xFF);
+		break;
+	case DSIZ_64K:
+		index = (params->tid & 0xFF) ^ ((params->epn >> 4) & 0xFF) ^ ((params->epn >> 12) & 0xFF);
+		break;
+	case DSIZ_1M:
+		index = (params->tid & 0xFF) ^ ((params->epn >> 8) & 0xFF) ^ ((params->epn >> 12) & 0xF0);
+		break;
+	case DSIZ_16M:
+		index = (params->tid & 0xFF) ^ ((params->epn >> 12) & 0xFF);
+		break;
+	case DSIZ_256M:
+		index = (params->tid & 0xFF) ^ ((params->epn >> 12) & 0xF0);
+		break;
+	case DSIZ_1G:
+		index = (params->tid & 0xFF) ^ ((params->epn >> 12) & 0xC0);
+		break;
+	default:
+		assert(false);
+	}
+
+	way = params->way;
+	if (way == -1) {
+		for (way = 0; way < 4; ++way) {
+			index_way = (index << 2) | way;
+			if (!ppc476fs->tlb_cache[index_way].loaded) {
+				ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
+				if (ret != ERROR_OK)
+					return ret;
+				ppc476fs->tlb_cache[index_way].loaded = true;
+			}
+			if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
+				break;
+		}
+		if (way > 3) {
+			LOG_ERROR("there is no free way for the UTLB record");
+			return ERROR_FAIL;
+		}
+	}
+
+	index_way = (index << 2) | way;
+	if (!ppc476fs->tlb_cache[index_way].loaded) {
+		ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
+		if (ret != ERROR_OK)
+			return ret;
+		ppc476fs->tlb_cache[index_way].loaded = true;
+	}
+	if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) != 0) {
+			LOG_ERROR("the defined way is not free");
+			return ERROR_FAIL;
+	}
+
+	hw.data[0] = TLB_0_V_MASK;
+	set_bits_32(params->epn, TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN, &hw.data[0]);
+	if (params->ts != 0)
+		hw.data[0] |= TLB_0_TS_MASK;
+	set_bits_32(params->dsiz, TLB_0_DSIZ_BIT_POS, TLB_0_DSIZ_BIT_LEN, &hw.data[0]);
+
+	hw.data[1] = 0;
+	set_bits_32(params->rpn, TLB_1_RPN_BIT_POS, TLB_1_RPN_BIT_LEN, &hw.data[1]);
+	set_bits_32(params->erpn, TLB_1_ERPN_BIT_POS, TLB_1_ERPN_BIT_LEN, &hw.data[1]);
+
+	hw.data[2] = 0;
+	if (params->il1i != 0)
+		hw.data[2] |= TLB_2_IL1I_MASK;
+	if (params->il1d != 0)
+		hw.data[2] |= TLB_2_IL1D_MASK;
+	set_bits_32(params->u, TLB_2_U_BIT_POS, TLB_2_U_BIT_LEN, &hw.data[2]);
+	set_bits_32(params->wimg, TLB_2_WIMG_BIT_POS, TLB_2_WIMG_BIT_LEN, &hw.data[2]);
+	if (params->en != 0)
+		hw.data[2] |= TLB_2_EN_MASK;
+	set_bits_32(params->uxwr, TLB_2_UXWR_BIT_POS, TLB_2_UXWR_BIT_LEN, &hw.data[2]);
+	set_bits_32(params->sxwr, TLB_2_SXWR_BIT_POS, TLB_2_SXWR_BIT_LEN, &hw.data[2]);
+
+	hw.tid = params->tid;
+
+	ret = write_tlb(target, index_way, &hw);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// invalidate and reload UTLB record
+	ppc476fs->tlb_cache[index_way].loaded = false;
+	ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
+	if (ret != ERROR_OK)
+		return ret;
+	ppc476fs->tlb_cache[index_way].loaded = true;
+
+	print_tlb_table_header(CMD);
+	print_tlb_table_record(CMD, index_way, &ppc476fs->tlb_cache[index_way].hw);
+
+	// restore MMUCR
+	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R1
+	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
 
 	return ERROR_OK;
 }
@@ -2488,14 +2664,6 @@ static int ppc476fs_mmu(struct target *target, int *enabled)
 COMMAND_HANDLER(ppc476fs_handle_tlb_dump_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	struct tlb_sort_record records[TLB_NUMBER];
-	int64_t start_time = timeval_ms();
-	uint32_t saved_MMUCR;
-	uint32_t value_SSPCR;
-	uint32_t value_USPCR;
-	int i;
-	int record_count;
 	int ret;
 
 	if (CMD_ARGC != 0)
@@ -2506,55 +2674,11 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_dump_command)
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	// save MMUCR
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
-	if (ret != ERROR_OK)
+	ret = handle_tlb_dump_command_internal(CMD, target);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("error executing the command %i", ret);
 		return ret;
-
-	ret = load_uncached_tlbs(target, 0, TLB_NUMBER);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ret = read_spr_reg(target, SPR_REG_NUM_SSPCR, &value_SSPCR);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_spr_reg(target, SPR_REG_NUM_USPCR, &value_USPCR);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore MMUCR
-	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// process only valid records
-	record_count = 0;
-	for (i = 0; i < TLB_NUMBER; ++i) {
-		if ((ppc476fs->tlb_cache[i].hw.data[0] & TLB_0_V_MASK) != 0) {
-			records[record_count].index_way = i;
-			records[record_count++].hw = ppc476fs->tlb_cache[i].hw;
-		}
 	}
-
-	qsort(records, record_count, sizeof(struct tlb_sort_record), tlb_record_compar);
-
-	print_tlb_table_header(CMD);
-	for (i = 0; i < record_count; ++i) {
-		print_tlb_table_record(CMD, records[i].index_way, &records[i].hw);
-	}
-	command_print(CMD, "SSPCR = 0x%08X, USPCR = 0x%08X", value_SSPCR, value_USPCR);
-
-	LOG_DEBUG("Execution time: %li ms", timeval_ms() - start_time);
 
 	return ERROR_OK;
 }
@@ -2562,14 +2686,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_dump_command)
 COMMAND_HANDLER(ppc476fs_handle_tlb_create_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct tlb_command_params params;
-	struct tlb_hw_record hw;
-	uint32_t saved_MMUCR;
-	int index;
-	int way;
-	int start_index_way;
-	int index_way;
 	int ret;
 
 	ret = parse_tlb_command_params(CMD_ARGC, CMD_ARGV, &params);
@@ -2588,114 +2705,11 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_create_command)
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
-	// save MMUCR
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
-	if (ret != ERROR_OK)
+	ret = handle_tlb_create_command_internal(CMD, target, &params);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("error executing the command %i", ret);
 		return ret;
-
-	switch (params.dsiz)
-	{
-	case DSIZ_4K:
-		index = (params.tid & 0xFF) ^ (params.epn & 0xFF) ^ ((params.epn >> 4) & 0xF0) ^ ((params.epn >> 12) & 0xFF);
-		break;
-	case DSIZ_16K:
-		index = (params.tid & 0xFF) ^ ((params.epn >> 2) & 0xFF) ^ ((params.epn >> 4) & 0xC0) ^ ((params.epn >> 12) & 0xFF);
-		break;
-	case DSIZ_64K:
-		index = (params.tid & 0xFF) ^ ((params.epn >> 4) & 0xFF) ^ ((params.epn >> 12) & 0xFF);
-		break;
-	case DSIZ_1M:
-		index = (params.tid & 0xFF) ^ ((params.epn >> 8) & 0xFF) ^ ((params.epn >> 12) & 0xF0);
-		break;
-	case DSIZ_16M:
-		index = (params.tid & 0xFF) ^ ((params.epn >> 12) & 0xFF);
-		break;
-	case DSIZ_256M:
-		index = (params.tid & 0xFF) ^ ((params.epn >> 12) & 0xF0);
-		break;
-	case DSIZ_1G:
-		index = (params.tid & 0xFF) ^ ((params.epn >> 12) & 0xC0);
-		break;
-	default:
-		assert(false);
 	}
-
-	way = params.way;
-	if (way == -1) {
-		start_index_way = index << 2;
-		ret = load_uncached_tlbs(target, start_index_way, start_index_way + 4);
-		if (ret != ERROR_OK)
-			return ret;
-		for (way = 0; way < 4; ++way) {
-			if ((ppc476fs->tlb_cache[start_index_way + way].hw.data[0] & TLB_0_V_MASK) == 0)
-				break;
-		}
-		if (way > 3) {
-			LOG_ERROR("there is not free way for the UTLB record");
-			return ERROR_FAIL;
-		}
-	}
-
-	index_way = (index << 2) | way;
-	ret = load_uncached_tlbs(target, index_way, index_way + 1);
-	if (ret != ERROR_OK)
-		return ret;
-	if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) != 0) {
-			LOG_ERROR("the defined way is not free");
-			return ERROR_FAIL;
-	}
-
-	hw.data[0] = TLB_0_V_MASK;
-	set_bits_32(params.epn, TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN, &hw.data[0]);
-	if (params.ts != 0)
-		hw.data[0] |= TLB_0_TS_MASK;
-	set_bits_32(params.dsiz, TLB_0_DSIZ_BIT_POS, TLB_0_DSIZ_BIT_LEN, &hw.data[0]);
-
-	hw.data[1] = 0;
-	set_bits_32(params.rpn, TLB_1_RPN_BIT_POS, TLB_1_RPN_BIT_LEN, &hw.data[1]);
-	set_bits_32(params.erpn, TLB_1_ERPN_BIT_POS, TLB_1_ERPN_BIT_LEN, &hw.data[1]);
-
-	hw.data[2] = 0;
-	if (params.il1i != 0)
-		hw.data[2] |= TLB_2_IL1I_MASK;
-	if (params.il1d != 0)
-		hw.data[2] |= TLB_2_IL1D_MASK;
-	set_bits_32(params.u, TLB_2_U_BIT_POS, TLB_2_U_BIT_LEN, &hw.data[2]);
-	set_bits_32(params.wimg, TLB_2_WIMG_BIT_POS, TLB_2_WIMG_BIT_LEN, &hw.data[2]);
-	if (params.en != 0)
-		hw.data[2] |= TLB_2_EN_MASK;
-	set_bits_32(params.uxwr, TLB_2_UXWR_BIT_POS, TLB_2_UXWR_BIT_LEN, &hw.data[2]);
-	set_bits_32(params.sxwr, TLB_2_SXWR_BIT_POS, TLB_2_SXWR_BIT_LEN, &hw.data[2]);
-
-	hw.tid = params.tid;
-
-	ret = write_tlb(target, index_way, &hw);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// invalidate and reload UTLB record
-	ppc476fs->tlb_cache[index_way].loaded = false;
-	ret = load_uncached_tlbs(target, index_way, index_way + 1);
-	if (ret != ERROR_OK)
-		return ret;
-
-	print_tlb_table_header(CMD);
-	print_tlb_table_record(CMD, index_way, &ppc476fs->tlb_cache[index_way].hw);
-
-	// restore MMUCR
-	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
-	if (ret != ERROR_OK)
-		return ret;
 
 	return ERROR_OK;
 }
