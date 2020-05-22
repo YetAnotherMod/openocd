@@ -1555,18 +1555,30 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 }
 
 // the target must be halted
+// the function deletes the UTLB record at the specified index_way if the 'valid' bit is 0
 // the function uses R1, R2, MMUCR registers and does not restore them
 // the function cannot write a bolted UTLB record
+// the function does not call 'isync'
 static int write_tlb(struct target *target, int index_way, struct tlb_hw_record *hw)
 {
 	int way;
+	uint32_t tid;
+	uint32_t data0;
 	uint32_t r2_value;
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
 	assert((hw->data[0] & TLB_0_BLTD_MASK) == 0);
 
-	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, hw->tid);
+	// correction for non-valid UTLB record
+	tid = hw->tid;
+	data0 = hw->data[0];
+	if ((data0 & TLB_0_V_MASK) == 0) {
+		tid = index_way >> 2; // make the correct UTLB index
+		data0 = 0;
+	}
+
+	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, tid);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1576,7 +1588,7 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = write_gpr_reg(target, 1, hw->data[0]);
+	ret = write_gpr_reg(target, 1, data0);
 	if (ret != ERROR_OK)
 		return ret;
 	ret = stuff_code(target, 0x7C2207A4); // tlbwe R1, R2, 0
@@ -1584,7 +1596,7 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 		return ret;
 
 	// otimization for non-valid UTLB records
-	if ((hw->data[0] & TLB_0_V_MASK) == 0)
+	if ((data0 & TLB_0_V_MASK) == 0)
 		return ERROR_OK;
 
 	ret = write_gpr_reg(target, 1, hw->data[1]);
@@ -1600,6 +1612,23 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	ret = stuff_code(target, 0x7C2217A4); // tlbwe R1, R2, 2
 	if (ret != ERROR_OK)
 		return ret;
+
+	return ERROR_OK;
+}
+
+static int load_uncached_tlb(struct target *target, int index_way)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	if (ppc476fs->tlb_cache[index_way].loaded)
+		return ERROR_OK;
+
+	ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fs->tlb_cache[index_way].loaded = true;
 
 	return ERROR_OK;
 }
@@ -1665,7 +1694,7 @@ static void print_tlb_table_record(struct command_invocation *cmd, int index_way
 	sprintf(buffer, "%04X  %i %1s%05X  %i  %4s  %03X %05X   %X  %2s  %i    %i   %X   %X    %X  %02X%i",
 		hw->tid,
 		(int)((hw->data[0] & TLB_0_TS_MASK) != 0),
-		(hw->data[0] & TLB_0_BLTD_MASK) != 0 ? "*" : "",
+		(hw->data[0] & TLB_0_V_MASK) == 0 ? "-" : (hw->data[0] & TLB_0_BLTD_MASK) != 0 ? "*" : "",
 		get_bits_32(hw->data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN),
 		(int)((hw->data[0] & TLB_0_V_MASK) != 0),
 		dsiz_to_string(get_bits_32(hw->data[0], TLB_0_DSIZ_BIT_POS, TLB_0_DSIZ_BIT_LEN)),
@@ -1685,7 +1714,6 @@ static void print_tlb_table_record(struct command_invocation *cmd, int index_way
 
 static int phys_mem_init(struct target *target, struct phys_mem_state *state)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 
 	ret = stuff_code(target, 0x7C4000A6); // mfmsr R2
@@ -1716,12 +1744,9 @@ static int phys_mem_init(struct target *target, struct phys_mem_state *state)
 		return ret;
 
 	// load TLB record
-	if (!ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].loaded) {
-		ret = load_tlb(target, PHYS_MEM_TLB_INDEX_WAY, &ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].hw);
-		if (ret != ERROR_OK)
-			return ret;
-		ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].loaded = true;
-	}
+	ret = load_uncached_tlb(target, PHYS_MEM_TLB_INDEX_WAY);
+	if (ret != ERROR_OK)
+		return ret;
 
 	// set PID
 	ret = write_spr_reg(target, SPR_REG_NUM_PID, PHYS_MEM_MAGIC_PID);
@@ -1952,8 +1977,6 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct tlb_sort_record records[TLB_NUMBER];
-	int64_t start_time = timeval_ms();
-	int64_t current_time;
 	uint32_t saved_MMUCR;
 	uint32_t value_SSPCR;
 	uint32_t value_USPCR;
@@ -1966,19 +1989,12 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 	if (ret != ERROR_OK)
 		return ret;
 
-	// load uncached TLBs
+	// load all uncached TLBs
 	for (i = 0; i < TLB_NUMBER; ++i) {
-		if (ppc476fs->tlb_cache[i].loaded)
-			continue;
-		current_time = timeval_ms();
-		if (current_time - start_time > 500) {
-			keep_alive();
-			start_time = current_time;
-		}
-		ret = load_tlb(target, i, &ppc476fs->tlb_cache[i].hw);
+		keep_alive();
+		ret = load_uncached_tlb(target, i);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->tlb_cache[i].loaded = true;
 	}
 
 	ret = read_spr_reg(target, SPR_REG_NUM_SSPCR, &value_SSPCR);
@@ -2069,12 +2085,9 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	if (way == -1) {
 		for (way = 0; way < 4; ++way) {
 			index_way = (index << 2) | way;
-			if (!ppc476fs->tlb_cache[index_way].loaded) {
-				ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
-				if (ret != ERROR_OK)
-					return ret;
-				ppc476fs->tlb_cache[index_way].loaded = true;
-			}
+			ret = load_uncached_tlb(target, index_way);
+			if (ret != ERROR_OK)
+				return ret;
 			if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
 				break;
 		}
@@ -2085,12 +2098,9 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	}
 
 	index_way = (index << 2) | way;
-	if (!ppc476fs->tlb_cache[index_way].loaded) {
-		ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
-		if (ret != ERROR_OK)
-			return ret;
-		ppc476fs->tlb_cache[index_way].loaded = true;
-	}
+	ret = load_uncached_tlb(target, index_way);
+	if (ret != ERROR_OK)
+		return ret;
 	if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) != 0) {
 			LOG_ERROR("the defined way is not free");
 			return ERROR_FAIL;
@@ -2124,12 +2134,16 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	if (ret != ERROR_OK)
 		return ret;
 
-	// invalidate and reload UTLB record
-	ppc476fs->tlb_cache[index_way].loaded = false;
-	ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
+	// syncing
+	ret = stuff_code(target, 0x4C00012C); // isync
 	if (ret != ERROR_OK)
 		return ret;
-	ppc476fs->tlb_cache[index_way].loaded = true;
+
+	// invalidate and reload UTLB record
+	ppc476fs->tlb_cache[index_way].loaded = false;
+	ret = load_uncached_tlb(target, index_way);
+	if (ret != ERROR_OK)
+		return ret;
 
 	print_tlb_table_header(CMD);
 	print_tlb_table_record(CMD, index_way, &ppc476fs->tlb_cache[index_way].hw);
@@ -2146,6 +2160,124 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 
 	// restore R2
 	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+static int handle_tlb_drop_command_internal(struct command_invocation *cmd, struct target *target, struct tlb_command_params *params)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct tlb_hw_record hw;
+	uint32_t saved_MMUCR;
+	uint32_t ts;
+	int index_way;
+	int count = 0;
+	int ret;
+
+	// save MMUCR
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	memset(&hw, 0, sizeof hw);
+
+	for (index_way = 0; index_way < TLB_NUMBER; ++index_way) {
+		keep_alive();
+		ret = load_uncached_tlb(target, index_way);
+		if (ret != ERROR_OK)
+			return ret;
+
+		if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
+			continue;
+		if (ppc476fs->tlb_cache[index_way].hw.tid != params->tid)
+			continue;
+		if (get_bits_32(ppc476fs->tlb_cache[index_way].hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN) != params->epn)
+			continue;
+		ts = ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_TS_MASK) != 0);
+		if (ts != params->ts)
+			continue;
+
+		ppc476fs->tlb_cache[index_way].loaded = false;
+		ret = write_tlb(target, index_way, &hw);
+		if (ret != ERROR_OK)
+			return ret;
+
+		// syncing
+		ret = stuff_code(target, 0x4C00012C); // isync
+		if (ret != ERROR_OK)
+			return ret;
+
+		if (count == 0)
+			print_tlb_table_header(CMD);
+		print_tlb_table_record(CMD, index_way, &ppc476fs->tlb_cache[index_way].hw);
+		++count;
+	}
+
+	// restore MMUCR
+	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R1
+	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if (count == 0)
+		command_print(CMD, "No UTLB records have been found");
+	else
+		command_print(CMD, "The UTLB records above have been deleted (%i)", count);
+
+	return ERROR_OK;
+}
+
+static int handle_tlb_drop_all_command_internal(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct tlb_hw_record hw;
+	uint32_t saved_MMUCR;
+	int i;
+	int ret;
+
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	tlb_cache_invalidate(target);
+
+	memset(&hw, 0, sizeof hw);
+
+	for (i = 0; i < TLB_NUMBER; ++i) {
+		keep_alive();
+		ret = write_tlb(target, i, &hw);
+		if (ret != ERROR_OK)
+			return ret;
+	}
+
+	// syncing
+	ret = stuff_code(target, 0x4C00012C); // isync
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore MMUCR
+	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R1
+	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2714,6 +2846,56 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_create_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(ppc476fs_handle_tlb_drop_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	struct tlb_command_params params;
+	int ret;
+
+	ret = parse_tlb_command_params(CMD_ARGC, CMD_ARGV, &params);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("parameter parse error");
+		return ret;
+	}
+
+	if ((params.mask & TLB_PARAMS_MASK_EPN) == 0) {
+		LOG_ERROR("parameter 'epn' is not defined");
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	if ((params.mask & ~(TLB_PARAMS_MASK_EPN | TLB_PARAMS_MASK_TID | TLB_PARAMS_MASK_TS)) != 0) {
+		LOG_ERROR("only parameters 'epn', 'tid' and 'ts' can be defined");
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	ret = handle_tlb_drop_command_internal(CMD, target, &params);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("error executing the command %i", ret);
+		return ret;
+	}
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fs_handle_tlb_drop_all_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	int ret;
+
+	if (CMD_ARGC != 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	ret = handle_tlb_drop_all_command_internal(target);
+	if (ret != ERROR_OK) {
+		LOG_ERROR("error executing the command %i", ret);
+		return ret;
+	}
+
+	command_print(CMD, "All UTLB records have been deleted");
+
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(ppc476fs_handle_status_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
@@ -2760,6 +2942,17 @@ COMMAND_HANDLER(ppc476fs_handle_jtag_speed_command)
 	return ERROR_OK;
 }
 
+static const struct command_registration ppc476fs_tlb_drop_command_handlers[] = {
+	{
+		.name = "all",
+		.handler = ppc476fs_handle_tlb_drop_all_command,
+		.mode = COMMAND_EXEC,
+		.usage = "",
+		.help = "delete all UTLB records"
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
 static const struct command_registration ppc476fs_tlb_exec_command_handlers[] = {
 	{
 		.name = "dump",
@@ -2774,6 +2967,14 @@ static const struct command_registration ppc476fs_tlb_exec_command_handlers[] = 
 		.mode = COMMAND_EXEC,
 		.usage = "epn=<xxx> rpn=<xxx> [erpn=0] [tid=0] [ts=0] [dsiz=4k] [way=auto] [bltd=0] [il1i=0] [il1d=0] [u=0] [wimg=0] [en=BE] [uxwr=0] [sxwr=0]",
 		.help = "create new UTLB record"
+	},
+	{
+		.name = "drop",
+		.handler = ppc476fs_handle_tlb_drop_command,
+		.mode = COMMAND_EXEC,
+		.usage = "epn=<xxx> [tid=0] [ts=0]",
+		.help = "delete UTLB record",
+		.chain = ppc476fs_tlb_drop_command_handlers
 	},
 	COMMAND_REGISTRATION_DONE
 };
