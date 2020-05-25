@@ -1694,7 +1694,7 @@ static void print_tlb_table_record(struct command_invocation *cmd, int index_way
 	sprintf(buffer, "%04X  %i %1s%05X  %i  %4s  %03X %05X   %X  %2s  %i    %i   %X   %X    %X  %02X%i",
 		hw->tid,
 		(int)((hw->data[0] & TLB_0_TS_MASK) != 0),
-		(hw->data[0] & TLB_0_V_MASK) == 0 ? "-" : (hw->data[0] & TLB_0_BLTD_MASK) != 0 ? "*" : "",
+		(hw->data[0] & TLB_0_BLTD_MASK) != 0 ? "*" : "",
 		get_bits_32(hw->data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN),
 		(int)((hw->data[0] & TLB_0_V_MASK) != 0),
 		dsiz_to_string(get_bits_32(hw->data[0], TLB_0_DSIZ_BIT_POS, TLB_0_DSIZ_BIT_LEN)),
