@@ -12,13 +12,14 @@
 #include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
-/* #undef LOG_DEBUG
+// ???
+#undef LOG_DEBUG
 #define LOG_DEBUG(expr ...) \
 	do { \
 		printf("D:%i:%s: ", __LINE__, __func__); \
 		printf(expr); \
 		printf("\n"); \
-	} while (0)*/
+	} while (0)
 
 // jtag instruction codes without core ids
 #define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
@@ -42,6 +43,7 @@
 #define SPR_REG_NUM_DBCR2 310
 #define SPR_REG_NUM_DBSR 304
 #define SPR_REG_NUM_IAC_BASE 312 /* IAC1..IAC4 */
+#define SPR_REG_NUM_DAC_BASE 316 /* DAC1..DAC2 */
 #define SPR_REG_NUM_SSPCR 830
 #define SPR_REG_NUM_USPCR 831
 #define SPR_REG_NUM_MMUCR 946
@@ -49,6 +51,9 @@
 #define DBCR0_EDM_MASK BIT(63 - 32)
 #define DBCR0_IAC1_MASK BIT(63 - 40)
 #define DBCR0_IACX_MASK (0xF << (63 - 43))
+#define DBCR0_DAC1R_MASK BIT(64 - 44)
+#define DBCR0_DAC1W_MASK BIT(64 - 45)
+#define DBCR0_DACX_MASK (0xF << (64 - 47))
 #define DBCR0_FT_MASK BIT(63 - 63)
 
 #define DBSR_IAC1_MASK BIT(63 - 40)
@@ -86,6 +91,8 @@
 
 #define ERROR_MEMORY_AT_STACK (-99)
 
+// ?? HWBP_NUMBER 4
+#define WP_NUMBER 2
 #define TLB_NUMBER 1024
 
 #define TLB_0_EPN_BIT_POS 12
@@ -182,6 +189,7 @@ struct ppc476fs_common {
 	struct reg *XER_reg;
 	struct reg *FPSCR_reg;
 	uint32_t DBCR0_value;
+	uint32_t DAC_value[WP_NUMBER];
 	uint32_t saved_R1;
 	uint32_t saved_R2;
 	uint32_t saved_LR;
@@ -680,7 +688,7 @@ static int read_required_fpu_regs(struct target *target)
 
 	ret = test_memory_at_stack(target);
 	if (ret == ERROR_MEMORY_AT_STACK) {
-		LOG_WARNING("cannot read FPU registers because of the stark pointer, CoreID: %i", target->coreid);
+		LOG_WARNING("cannot read FPU registers because of the stark pointer, coreid=%i", target->coreid);
 		for (i = 0; i < FPR_REG_COUNT; ++i) {
 			reg = ppc476fs->fpr_regs[i];
 			if (!reg->valid) {
@@ -865,7 +873,7 @@ int write_dirty_fpu_regs(struct target *target)
 
 	ret = test_memory_at_stack(target);
 	if (ret == ERROR_MEMORY_AT_STACK) {
-		LOG_WARNING("cannot write FPU registers because of the stark pointer, CoreID: %i", target->coreid);
+		LOG_WARNING("cannot write FPU registers because of the stark pointer, coreid=%i", target->coreid);
 		for (i = 0; i < FPR_REG_COUNT; ++i) {
 			reg = ppc476fs->fpr_regs[i];
 			reg->dirty = false;
@@ -1123,7 +1131,7 @@ static void build_reg_caches(struct target *target)
 	target->reg_cache = gen_cache;
 }
 
-static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint)
+static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint) // ??? bp
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
@@ -1147,7 +1155,7 @@ static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint
 }
 
 // the function uses R2 register and does not restore one
-static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
+static int set_breakpoint(struct target *target, struct breakpoint *breakpoint) // ?? bp
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
@@ -1162,7 +1170,7 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 			break;
 		++iac_index;
 	}
-	assert(iac_index < 4);
+	assert(iac_index < 4); // ??? up + const
 
 	breakpoint->linked_BRP = iac_index;
 
@@ -1182,10 +1190,12 @@ static int enable_breakpoints(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct breakpoint *bp = target->breakpoints;
+	bool R2_used = false;
 	int ret;
 
 	while (bp != NULL) {
 		if (bp->set == 0) {
+			R2_used = true;
 			ret = set_breakpoint(target, bp);
 			if (ret != ERROR_OK)
 				return ret;
@@ -1193,15 +1203,17 @@ static int enable_breakpoints(struct target *target)
 		bp = bp->next;
 	}
 
-	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
-	if (ret != ERROR_OK)
-		return ret;
+	// restore R2 if it is needed
+	if (R2_used) {
+		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		if (ret != ERROR_OK)
+			return ret;
+	}
 
 	return ERROR_OK;
 }
 
-static void break_points_invalidate(struct target *target)
+static void breakpoints_invalidate(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct breakpoint *bp = target->breakpoints;
@@ -1211,6 +1223,132 @@ static void break_points_invalidate(struct target *target)
 	while (bp != NULL) {
 		bp->set = 0;
 		bp = bp->next;
+	}
+}
+
+static int unset_watchpoint(struct target *target, struct watchpoint *wp)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+	int dac_index = 0;
+	uint32_t dacr_mask;
+	uint32_t dacw_mask;
+
+	assert(wp->set != 0);
+
+	while (true) {
+		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
+		dacw_mask = (DBCR0_DAC1W_MASK >> (dac_index * 2));
+		if ((ppc476fs->DBCR0_value & (dacr_mask | dacw_mask)) != 0)
+		{
+			if (ppc476fs->DAC_value[dac_index] == (uint32_t)wp->address)
+				break;
+		}
+		++dac_index;
+		assert(dac_index < WP_NUMBER);
+	}
+
+	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~(dacr_mask | dacw_mask));
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	wp->set = 0;
+
+	return ERROR_OK;
+}
+
+// the function uses R2 register and does not restore one
+static int set_watchpoint(struct target *target, struct watchpoint *wp)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+	int dac_index = 0;
+	uint32_t dacr_mask;
+	uint32_t dacw_mask;
+	uint32_t dac_mask;
+
+	assert(wp->set == 0);
+
+	while (true) {
+		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
+		dacw_mask = (DBCR0_DAC1W_MASK >> (dac_index * 2));
+		if ((ppc476fs->DBCR0_value & (dacr_mask | dacw_mask)) == 0)
+			break;
+		++dac_index;
+		assert(dac_index < WP_NUMBER);
+	}
+
+	ret = write_spr_reg(target, SPR_REG_NUM_DAC_BASE + dac_index, (uint32_t)wp->address);
+	if (ret != ERROR_OK)
+		return ret;
+	ppc476fs->DAC_value[dac_index] = (uint32_t)wp->address;
+
+	switch (wp->rw)
+	{
+		case WPT_READ:
+			dac_mask = dacr_mask;
+			break;
+		case WPT_WRITE:
+			dac_mask = dacw_mask;
+			break;
+		case WPT_ACCESS:
+			dac_mask = dacr_mask | dacw_mask;
+			break;
+		default:
+			assert(false);
+	}
+
+	ret = write_DBCR0(target, ppc476fs->DBCR0_value | dac_mask);
+	if (ret != ERROR_OK)
+		return ret;
+
+	wp->set = 1;
+
+	return ERROR_OK;
+}
+
+static int enable_watchpoints(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct watchpoint *wp = target->watchpoints;
+	bool R2_used = false;
+	int ret;
+
+	while (wp != NULL) {
+		if (wp->set == 0) {
+			R2_used = true;
+			ret = set_watchpoint(target, wp);
+			if (ret != ERROR_OK)
+				return ret;
+		}
+		wp = wp->next;
+	}
+
+	// restore R2 if it is needed
+	if (R2_used) {
+		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		if (ret != ERROR_OK)
+			return ret;
+	}
+
+	return ERROR_OK;
+}
+
+static void watchpoints_invalidate(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct watchpoint *wp = target->watchpoints;
+
+	assert((ppc476fs->DBCR0_value & DBCR0_DACX_MASK) == 0);
+
+	while (wp != NULL) {
+		wp->set = 0;
+		wp = wp->next;
 	}
 }
 
@@ -1255,6 +1393,10 @@ static int restore_state(struct target *target)
 	if (ret != ERROR_OK)
 		return ret;
 
+	ret = enable_watchpoints(target);
+	if (ret != ERROR_OK)
+		return ret;
+
 	regs_status_invalidate(target);
 	tlb_cache_invalidate(target);
 
@@ -1267,7 +1409,7 @@ static int restore_state_before_run(struct target *target, int current, target_a
 	int ret;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_ERROR("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1299,7 +1441,8 @@ static int save_state_and_init_debug(struct target *target)
 	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
 	if (ret != ERROR_OK)
 		return ret;
-	break_points_invalidate(target);
+	breakpoints_invalidate(target);
+	watchpoints_invalidate(target);
 
 	ret = write_spr_reg(target, SPR_REG_NUM_DBCR1, 0);
 	if (ret != ERROR_OK)
@@ -1330,7 +1473,8 @@ static int reset_and_halt(struct target *target)
 	target->state = TARGET_RESET;
 	regs_status_invalidate(target); // if an error occurs
 	ppc476fs->DBCR0_value = 0;
-	break_points_invalidate(target); // if an error occurs
+	breakpoints_invalidate(target); // if an error occurs
+	watchpoints_invalidate(target); // if an error occurs
 
 	ret = write_JDCR(target, JDCR_RESET_MASK);
 	if (ret != ERROR_OK)
@@ -1409,6 +1553,8 @@ static int read_virt_mem(struct target *target, uint32_t address, uint32_t size,
 	uint32_t i;
 	int ret;
 
+	// ??? test with watchpoints
+
 	assert(target->state == TARGET_HALTED);
 
 	switch (size)
@@ -1459,6 +1605,8 @@ static int write_virt_mem(struct target *target, uint32_t address, uint32_t size
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
+
+	// ??? test with watchpoints
 
 	switch (size)
 	{
@@ -2291,7 +2439,7 @@ static int ppc476fs_poll(struct target *target)
 	uint32_t JDSR_value, DBSR_value;
 	int ret;
 
-	// LOG_DEBUG("CoreID: %i, cores %i %i", target->coreid, target->gdb_service->core[0], target->gdb_service->core[1]);
+	// LOG_DEBUG("coreid=%i, cores %i %i", target->coreid, target->gdb_service->core[0], target->gdb_service->core[1]);
 
 	ret = read_JDSR(target, &JDSR_value);
 	if (ret != ERROR_OK) {
@@ -2342,7 +2490,7 @@ int ppc476fs_arch_state(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 
-	LOG_USER("target halted due to %s, CoreID: %i, PC: 0x%08X",
+	LOG_USER("target halted due to %s, coreid=%i, PC: 0x%08X",
 		debug_reason_name(target),
 		target->coreid,
 		get_reg_value_32(ppc476fs->PC_reg));
@@ -2354,7 +2502,7 @@ static int ppc476fs_halt(struct target *target)
 {
 	int ret;
 
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	if (target->state == TARGET_HALTED) {
 		LOG_WARNING("target was already halted");
@@ -2375,7 +2523,7 @@ static int ppc476fs_halt(struct target *target)
 
 static int ppc476fs_resume(struct target *target, int current, target_addr_t address, int handle_breakpoints, int debug_execution)
 {
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	int ret = restore_state_before_run(target, current, address, DBG_REASON_NOTHALTED);
 	if (ret != ERROR_OK)
@@ -2399,7 +2547,7 @@ static int ppc476fs_resume(struct target *target, int current, target_addr_t add
 
 static int ppc476fs_step(struct target *target, int current, target_addr_t address, int handle_breakpoints)
 {
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	int ret = restore_state_before_run(target, current, address, DBG_REASON_SINGLESTEP);
 	if (ret != ERROR_OK)
@@ -2417,7 +2565,7 @@ static int ppc476fs_step(struct target *target, int current, target_addr_t addre
 
 static int ppc476fs_assert_reset(struct target *target)
 {
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	if (target->reset_halt) {
 		LOG_ERROR("Device does not support 'reset halt' command");
@@ -2431,7 +2579,7 @@ static int ppc476fs_deassert_reset(struct target *target)
 {
 	int ret;
 
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	ret = reset_and_halt(target);
 	if (ret != ERROR_OK)
@@ -2455,7 +2603,7 @@ static int ppc476fs_soft_reset_halt(struct target *target)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 	
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	ret = reset_and_halt(target);
 	if (ret != ERROR_OK)
@@ -2494,20 +2642,25 @@ static int ppc476fs_read_memory(struct target *target, target_addr_t address, ui
 	uint32_t i;
 	int ret;
 
-	LOG_DEBUG("CoreID: %i, address: 0x%lX, size: %u, count: 0x%X", target->coreid, address, size, count);
+	LOG_DEBUG("coreid=%i, address: 0x%lX, size: %u, count: 0x%X", target->coreid, address, size, count);
 
-	if (target->state != TARGET_HALTED)
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1)))
+	if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1))) {
+		LOG_ERROR("unaligned access");
 		return ERROR_TARGET_UNALIGNED_ACCESS;
+	}
 
 	memset(buffer, 0, size * count); // clear result buffer
 
 	for (i = 0; i < count; ++i) {
+		keep_alive();
 		ret = read_virt_mem(target, (uint32_t)address, size, buffer);
 		if (ret != ERROR_OK)
 			return ret;
@@ -2536,18 +2689,23 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 	uint32_t i;
 	int ret;
 
-	LOG_DEBUG("CoreID: %i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
+	LOG_DEBUG("coreid=%i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
 
-	if (target->state != TARGET_HALTED)
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u)))
+	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u))) {
+		LOG_ERROR("unaligned access");
 		return ERROR_TARGET_UNALIGNED_ACCESS;
+	}
 
 	for (i = 0; i < count; ++i) {
+		keep_alive();
 		ret = write_virt_mem(target, (uint32_t)address, size, buffer);
 		if (ret != ERROR_OK)
 			return ret;
@@ -2574,7 +2732,7 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 	struct breakpoint *bp;
 	int bp_count;
 
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid, breakpoint->address, breakpoint->type, breakpoint->length);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
@@ -2591,7 +2749,7 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 			++bp_count;
 		bp = bp->next;
 	}
-	if (bp_count == 4)
+	if (bp_count == 4) // ??? const
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 
 	breakpoint->set = 0;
@@ -2603,7 +2761,7 @@ static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *
 {
 	int ret;
 
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid, breakpoint->address, breakpoint->type, breakpoint->length);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
@@ -2620,14 +2778,50 @@ static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *
 
 static int ppc476fs_add_watchpoint(struct target *target, struct watchpoint *watchpoint)
 {
-	return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	struct watchpoint *wp;
+	int wp_count;
+
+	LOG_DEBUG("coreid=%i, address=0x%08lX, rw=%i, length=%u, value=0x%08X, mask=0x%08X",
+		target->coreid, watchpoint->address, watchpoint->rw, watchpoint->length, watchpoint->value, watchpoint->mask);
+
+	if ((watchpoint->length != 1) && (watchpoint->length != 2) && (watchpoint->length != 4))
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+
+	if (watchpoint->mask != 0xFFFFFFFF)
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+
+	wp = target->watchpoints;
+	wp_count = 0;
+	while (wp != NULL) {
+		if (wp != watchpoint) // do not count the added watchpoint, it may be in the list
+			++wp_count;
+		wp = wp->next;
+	}
+	if (wp_count == WP_NUMBER)
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+
+	watchpoint->set = 0;
+
+	return ERROR_OK;
 }
 
 static int ppc476fs_remove_watchpoint(struct target *target, struct watchpoint *watchpoint)
 {
-	assert(false);
+	int ret;
 
-	return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	LOG_DEBUG("coreid=%i", target->coreid);
+
+	if (target->state != TARGET_HALTED)
+		return ERROR_TARGET_NOT_HALTED;
+
+	if (watchpoint->set == 0)
+		return ERROR_OK;
+
+	ret = unset_watchpoint(target, watchpoint);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
 }
 
 static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
@@ -2635,10 +2829,10 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 	struct ppc476fs_common *ppc476fs = calloc(1, sizeof(struct ppc476fs_common));
 	target->arch_info = ppc476fs;
 
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	if ((target->coreid < 0) || (target->coreid > 1)) {
-		LOG_ERROR("CoreID=%i is not allowed. It must be 0 or 1. It has been set to 0.", target->coreid);
+		LOG_ERROR("coreid=%i is not allowed. It must be 0 or 1. It has been set to 0.", target->coreid);
 		target->coreid = 0;
 	}
 
@@ -2647,7 +2841,7 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 
 static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *target)
 {
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	build_reg_caches(target);
 
@@ -2655,10 +2849,10 @@ static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *
 		struct ppc476fs_tap_ext *tap_ext = malloc(sizeof(struct ppc476fs_tap_ext));
 		tap_ext->last_coreid = -1;
 		target->tap->priv = tap_ext;
-		LOG_DEBUG("The TAP extera struct has been created, CoreID: %i", target->coreid);
+		LOG_DEBUG("The TAP extera struct has been created, coreid=%i", target->coreid);
 	}
 	else {
-		LOG_DEBUG("The TAP extra struct has already been created, CoreID: %i", target->coreid);
+		LOG_DEBUG("The TAP extra struct has already been created, coreid=%i", target->coreid);
 	}
 
 	return ERROR_OK;
@@ -2668,7 +2862,7 @@ static int ppc476fs_examine(struct target *target)
 {
 	int ret;
 
-	LOG_DEBUG("CoreID: %i", target->coreid);
+	LOG_DEBUG("coreid=%i", target->coreid);
 
 	ret = examine_internal(target);
 	if (ret != ERROR_OK) {
@@ -2683,7 +2877,10 @@ static int ppc476fs_examine(struct target *target)
 
 static int ppc476fs_virt2phys(struct target *target, target_addr_t address, target_addr_t *physical)
 {
+	LOG_DEBUG("coreid=%i", target->coreid);
+
 	*physical = 0;
+
 	return ERROR_TARGET_TRANSLATION_FAULT;
 }
 
@@ -2696,16 +2893,20 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 	uint32_t i;
 	int ret;
 
-	LOG_DEBUG("CoreID: %i, address: 0x%lX, size: %u, count: 0x%X", target->coreid, address, size, count);
+	LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid, address, size, count);
 
-	if (target->state != TARGET_HALTED)
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1)))
+	if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1))) {
+		LOG_ERROR("unaligned access");
 		return ERROR_TARGET_UNALIGNED_ACCESS;
+	}
 
 	memset(buffer, 0, size * count); // clear result buffer
 
@@ -2714,6 +2915,8 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 		return ret;
 
 	for (i = 0; i < count; ++i) {
+		keep_alive();
+
 		new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
 		if (new_ERPN_RPN != last_ERPN_RPN) {
 			ret = phys_mem_access(target, new_ERPN_RPN);
@@ -2747,22 +2950,28 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 	uint32_t i;
 	int ret;
 
-	LOG_DEBUG("CoreID: %i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
+	LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid, address, size, count);
 
-	if (target->state != TARGET_HALTED)
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) || !(buffer))
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u)))
+	if (((size == 4) && (address & 0x3u)) || ((size == 2) && (address & 0x1u))) {
+		LOG_ERROR("unaligned access");
 		return ERROR_TARGET_UNALIGNED_ACCESS;
+	}
 
 	ret = phys_mem_init(target, &state);
 	if (ret != ERROR_OK)
 		return ret;
 
 	for (i = 0; i < count; ++i) {
+		keep_alive();
+
 		new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
 		if (new_ERPN_RPN != last_ERPN_RPN) {
 			ret = phys_mem_access(target, new_ERPN_RPN);
@@ -2802,7 +3011,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_dump_command)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_ERROR("target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
