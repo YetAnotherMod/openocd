@@ -12,7 +12,7 @@
 #include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
-// ???
+/*
 #undef LOG_DEBUG
 #define LOG_DEBUG(expr ...) \
 	do { \
@@ -20,6 +20,7 @@
 		printf(expr); \
 		printf("\n"); \
 	} while (0)
+*/
 
 // jtag instruction codes without core ids
 #define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
@@ -51,9 +52,9 @@
 #define DBCR0_EDM_MASK BIT(63 - 32)
 #define DBCR0_IAC1_MASK BIT(63 - 40)
 #define DBCR0_IACX_MASK (0xF << (63 - 43))
-#define DBCR0_DAC1R_MASK BIT(64 - 44)
-#define DBCR0_DAC1W_MASK BIT(64 - 45)
-#define DBCR0_DACX_MASK (0xF << (64 - 47))
+#define DBCR0_DAC1R_MASK BIT(63 - 44)
+#define DBCR0_DAC1W_MASK BIT(63 - 45)
+#define DBCR0_DACX_MASK (0xF << (63 - 47))
 #define DBCR0_FT_MASK BIT(63 - 63)
 
 #define DBSR_IAC1_MASK BIT(63 - 40)
@@ -91,7 +92,7 @@
 
 #define ERROR_MEMORY_AT_STACK (-99)
 
-// ?? HWBP_NUMBER 4
+#define HW_BP_NUMBER 4
 #define WP_NUMBER 2
 #define TLB_NUMBER 1024
 
@@ -189,6 +190,7 @@ struct ppc476fs_common {
 	struct reg *XER_reg;
 	struct reg *FPSCR_reg;
 	uint32_t DBCR0_value;
+	uint32_t IAC_value[HW_BP_NUMBER];
 	uint32_t DAC_value[WP_NUMBER];
 	uint32_t saved_R1;
 	uint32_t saved_R2;
@@ -1131,15 +1133,26 @@ static void build_reg_caches(struct target *target)
 	target->reg_cache = gen_cache;
 }
 
-static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint) // ??? bp
+static int unset_breakpoint(struct target *target, struct breakpoint *bp)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	int ret;
+	int iac_index = 0;
 	uint32_t iac_mask;
+	int ret;
 
-	assert(breakpoint->set != 0);
+	assert(bp->set != 0);
 
-	iac_mask = (DBCR0_IAC1_MASK >> breakpoint->linked_BRP);
+	while (true) {
+		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
+		if ((ppc476fs->DBCR0_value & iac_mask) != 0)
+		{
+			if (ppc476fs->IAC_value[iac_index] == (uint32_t)bp->address)
+				break;
+		}
+		++iac_index;
+		assert(iac_index < HW_BP_NUMBER);
+	}
+
 	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~iac_mask);
 	if (ret != ERROR_OK)
 		return ret;
@@ -1149,39 +1162,39 @@ static int unset_breakpoint(struct target *target, struct breakpoint *breakpoint
 	if (ret != ERROR_OK)
 		return ret;
 
-	breakpoint->set = 0;
+	bp->set = 0;
 
 	return ERROR_OK;
 }
 
 // the function uses R2 register and does not restore one
-static int set_breakpoint(struct target *target, struct breakpoint *breakpoint) // ?? bp
+static int set_breakpoint(struct target *target, struct breakpoint *bp)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 	int iac_index = 0;
 	uint32_t iac_mask;
 
-	assert(breakpoint->set == 0);
+	assert(bp->set == 0);
 
 	while (true) {
 		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
 		if ((ppc476fs->DBCR0_value & iac_mask) == 0)
 			break;
 		++iac_index;
+		assert(iac_index < HW_BP_NUMBER);
 	}
-	assert(iac_index < 4); // ??? up + const
 
-	breakpoint->linked_BRP = iac_index;
-
-	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, (uint32_t)breakpoint->address);
+	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, (uint32_t)bp->address);
 	if (ret != ERROR_OK)
 		return ret;
+	ppc476fs->IAC_value[iac_index] = (uint32_t)bp->address;
+
 	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask);
 	if (ret != ERROR_OK)
 		return ret;
 
-	breakpoint->set = 1;
+	bp->set = 1;
 
 	return ERROR_OK;
 }
@@ -1229,10 +1242,10 @@ static void breakpoints_invalidate(struct target *target)
 static int unset_watchpoint(struct target *target, struct watchpoint *wp)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	int ret;
 	int dac_index = 0;
 	uint32_t dacr_mask;
 	uint32_t dacw_mask;
+	int ret;
 
 	assert(wp->set != 0);
 
@@ -1553,8 +1566,6 @@ static int read_virt_mem(struct target *target, uint32_t address, uint32_t size,
 	uint32_t i;
 	int ret;
 
-	// ??? test with watchpoints
-
 	assert(target->state == TARGET_HALTED);
 
 	switch (size)
@@ -1605,8 +1616,6 @@ static int write_virt_mem(struct target *target, uint32_t address, uint32_t size
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
-
-	// ??? test with watchpoints
 
 	switch (size)
 	{
@@ -2467,6 +2476,8 @@ static int ppc476fs_poll(struct target *target)
 			return ret;
 
 		if (DBSR_value != 0) {
+			if (((DBSR_value & DBSR_IAC_ALL_MASK) != 0) && ((DBSR_value & DBSR_DAC_ALL_MASK) != 0))
+				target->debug_reason = DBG_REASON_WPTANDBKPT; // watchpoints and breakpoints
 			if ((DBSR_value & DBSR_IAC_ALL_MASK) != 0)
 				target->debug_reason = DBG_REASON_BREAKPOINT;
 			else if ((DBSR_value & DBSR_DAC_ALL_MASK) != 0)
@@ -2689,7 +2700,7 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 	uint32_t i;
 	int ret;
 
-	LOG_DEBUG("coreid=%i, address: 0x%016lX, size: %u, count: 0x%08X", target->coreid, address, size, count);
+	LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%08X", target->coreid, address, size, count);
 
 	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("target not halted");
@@ -2749,7 +2760,7 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 			++bp_count;
 		bp = bp->next;
 	}
-	if (bp_count == 4) // ??? const
+	if (bp_count == HW_BP_NUMBER)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 
 	breakpoint->set = 0;
@@ -2809,7 +2820,8 @@ static int ppc476fs_remove_watchpoint(struct target *target, struct watchpoint *
 {
 	int ret;
 
-	LOG_DEBUG("coreid=%i", target->coreid);
+	LOG_DEBUG("coreid=%i, address=0x%08lX, rw=%i, length=%u, value=0x%08X, mask=0x%08X",
+		target->coreid, watchpoint->address, watchpoint->rw, watchpoint->length, watchpoint->value, watchpoint->mask);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
