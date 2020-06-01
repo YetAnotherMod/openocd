@@ -12,15 +12,14 @@
 #include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
-// ???
-#undef LOG_DEBUG
+/* #undef LOG_DEBUG
 #define LOG_DEBUG(expr ...) \
 	do { \
 		printf("D:%i:%s: ", __LINE__, __func__); \
 		printf(expr); \
 		printf("\n"); \
 	} while (0)
-
+*/
 
 // jtag instruction codes without core ids
 #define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
@@ -45,7 +44,6 @@
 #define SPR_REG_NUM_DBSR 304
 #define SPR_REG_NUM_IAC_BASE 312 /* IAC1..IAC4 */
 #define SPR_REG_NUM_DAC_BASE 316 /* DAC1..DAC2 */
-// ??? #define SPR_REG_NUM_ISPCR 829
 #define SPR_REG_NUM_SSPCR 830
 #define SPR_REG_NUM_USPCR 831
 #define SPR_REG_NUM_MMUCR 946
