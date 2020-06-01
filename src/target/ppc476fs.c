@@ -263,16 +263,16 @@ static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
 	*((uint32_t*)reg->value) = value;
 }
 
-static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
+// the function only add the request into the JTAG queue, the jtag_execute_queue function is not called
+// read_data can be null
+static void add_jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint8_t read_data[8])
 {
 	struct ppc476fs_tap_ext *tap_ext = target_to_ppc476fs_tap_ext(target);
 	struct scan_field instr_field;
 	uint8_t instr_buffer[4];
 	struct scan_field data_fields[1];
 	uint8_t data_out_buffer[8];
-	uint8_t data_in_buffer[8];
 	uint64_t zeros = 0;
-	int ret;
 
 	// !!! IMPORTANT
 	// prevent the JTAG core switching bug
@@ -295,7 +295,7 @@ static int jtag_read_write_register(struct target *target, uint32_t instr_withou
 	buf_set_u32(data_out_buffer, 32, 1, valid_bit);
 	data_fields[0].num_bits = 33;
 	data_fields[0].out_value = data_out_buffer;
-	data_fields[0].in_value = data_in_buffer;
+	data_fields[0].in_value = read_data;
 	jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
 
 	// !!! IMPORTANT
@@ -307,6 +307,14 @@ static int jtag_read_write_register(struct target *target, uint32_t instr_withou
 		data_fields[0].in_value = NULL;
 		jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
 	}
+}
+
+static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
+{
+	uint8_t data_in_buffer[8];
+	int ret;
+
+	add_jtag_read_write_register(target, instr_without_coreid, valid_bit, write_data, read_data == NULL ? NULL : data_in_buffer);
 
 	ret = jtag_execute_queue();
 	if (ret != ERROR_OK)
@@ -350,17 +358,6 @@ static int read_DBDR(struct target *target, uint32_t *data)
 	return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 0, 0, data);
 }
 
-static int write_DBDR(struct target *target, uint32_t data)
-{
-	int ret;
-
-	ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 1, data, NULL);
-	if (ret != ERROR_OK)
-		return ret;
-
-	return ERROR_OK;
-}
-
 static int read_gpr_reg(struct target *target, int reg_num, uint32_t *data)
 {
 	uint32_t code = 0x7C13FBA6 | (reg_num << 21); // mtdbdr Rx
@@ -371,15 +368,22 @@ static int read_gpr_reg(struct target *target, int reg_num, uint32_t *data)
 	return read_DBDR(target, data);
 }
 
+// the function only add the request into the JTAG queue, the jtag_execute_queue function is not called
+static void add_write_gpr_reg(struct target *target, int reg_num, uint32_t data)
+{
+	uint32_t code = 0x7C13FAA6 | (reg_num << 21); // mfdbdr Rx
+
+	add_jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 1, data, NULL);
+	add_jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
+}
+
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data)
 {
-	uint32_t code;
-	int ret = write_DBDR(target, data);
-	if (ret != ERROR_OK)
-		return ret;
+	int ret;
 
-	code = 0x7C13FAA6 | (reg_num << 21); // mfdbdr Rx
-	ret = stuff_code(target, code);
+	add_write_gpr_reg(target, reg_num, data);
+
+	ret = jtag_execute_queue();
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1772,12 +1776,12 @@ static int read_virt_mem(struct target *target, uint32_t address, uint32_t size,
 
 // the target must be halted
 // the function uses R1, R2 registers and does not restore them
-static int write_virt_mem(struct target *target, uint32_t address, uint32_t size, const uint8_t *buffer)
+// the function only add the request into the JTAG queue, the jtag_execute_queue function is not called
+static void add_write_virt_mem(struct target *target, uint32_t address, uint32_t size, const uint8_t *buffer)
 {
 	uint32_t code;
 	uint32_t value;
 	uint32_t i;
-	int ret;
 
 	assert(target->state == TARGET_HALTED);
 
@@ -1796,9 +1800,7 @@ static int write_virt_mem(struct target *target, uint32_t address, uint32_t size
 		assert(false);
 	}
 
-	ret = write_gpr_reg(target, 1, address);
-	if (ret != ERROR_OK)
-		return ret;
+	add_write_gpr_reg(target, 1, address);
 
 	value = 0;
 	for (i = 0; i < size; ++i)
@@ -1807,14 +1809,8 @@ static int write_virt_mem(struct target *target, uint32_t address, uint32_t size
 		value |= (uint32_t)*(buffer++);
 	}
 
-	ret = write_gpr_reg(target, 2, value);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, code);
-	if (ret != ERROR_OK)
-		return ret;
-
-	return ERROR_OK;
+	add_write_gpr_reg(target, 2, value);
+	add_jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
 }
 
 // the target must be halted
@@ -2872,13 +2868,12 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 
 	for (i = 0; i < count; ++i) {
 		keep_alive();
-		ret = write_virt_mem(target, (uint32_t)address, size, buffer);
-		if (ret != ERROR_OK)
-			return ret;
-
+		add_write_virt_mem(target, (uint32_t)address, size, buffer);
 		address += size;
 		buffer += size;
 	}
+
+	// the JTAG queue will be executed druring the registers restoing
 
 	// restore R1
 	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
@@ -3150,8 +3145,6 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 		return ret;
 
 	for (i = 0; i < count; ++i) {
-		keep_alive();
-
 		new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
 		if (new_ERPN_RPN != last_ERPN_RPN) {
 			ret = access_phys_mem(target, new_ERPN_RPN);
@@ -3160,13 +3153,13 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 			last_ERPN_RPN = new_ERPN_RPN;
 		}
 
-		ret = write_virt_mem(target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size, buffer);
-		if (ret != ERROR_OK)
-			return ret;
-
+		keep_alive();
+		add_write_virt_mem(target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size, buffer);
 		address += size;
 		buffer += size;
 	}
+
+	// the JTAG queue will be executed during the state restoring
 
 	// restore state
 	ret = restore_phys_mem(target, &state);
