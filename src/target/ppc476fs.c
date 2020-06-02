@@ -12,7 +12,8 @@
 #include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
-/* #undef LOG_DEBUG
+/*
+#undef LOG_DEBUG
 #define LOG_DEBUG(expr ...) \
 	do { \
 		printf("D:%i:%s: ", __LINE__, __func__); \
@@ -2851,7 +2852,7 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 	uint32_t i;
 	int ret;
 
-	LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%08X", target->coreid, address, size, count);
+	LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid, address, size, count);
 
 	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("target not halted");
@@ -2886,6 +2887,11 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 		return ret;
 
 	return ERROR_OK;	
+}
+
+static int ppc476fs_checksum_memory(struct target *target, target_addr_t address, uint32_t count, uint32_t *checksum)
+{
+	return ERROR_FAIL;
 }
 
 static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
@@ -3413,6 +3419,8 @@ struct target_type ppc476fs_target = {
 
 	.read_memory = ppc476fs_read_memory,
 	.write_memory = ppc476fs_write_memory,
+
+	.checksum_memory = ppc476fs_checksum_memory,
 
 	.add_breakpoint = ppc476fs_add_breakpoint,
 	.remove_breakpoint = ppc476fs_remove_breakpoint,
