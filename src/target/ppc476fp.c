@@ -181,7 +181,7 @@ struct tlb_command_params
 	uint32_t sxwr;
 };
 
-struct ppc476fs_common {
+struct ppc476fp_common {
 	struct reg *all_regs[ALL_REG_COUNT];
 	struct reg *gpr_regs[GPR_REG_COUNT];
 	struct reg *fpr_regs[FPR_REG_COUNT];
@@ -202,7 +202,7 @@ struct ppc476fs_common {
 	struct tlb_cached_record tlb_cache[TLB_NUMBER];
 };
 
-struct ppc476fs_tap_ext {
+struct ppc476fp_tap_ext {
 	int last_coreid; // -1 if the last core id is unknown
 };
 
@@ -215,20 +215,20 @@ struct phys_mem_state
 	uint32_t saved_USPCR;
 };
 
-static int ppc476fs_get_gen_reg(struct reg *reg);
-static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf);
+static int ppc476fp_get_gen_reg(struct reg *reg);
+static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf);
 
-static const struct reg_arch_type ppc476fs_gen_reg_type = {
-	.get = ppc476fs_get_gen_reg,
-	.set = ppc476fs_set_gen_reg
+static const struct reg_arch_type ppc476fp_gen_reg_type = {
+	.get = ppc476fp_get_gen_reg,
+	.set = ppc476fp_set_gen_reg
 };
 
-static int ppc476fs_get_fpu_reg(struct reg *reg);
-static int ppc476fs_set_fpu_reg(struct reg *reg, uint8_t *buf);
+static int ppc476fp_get_fpu_reg(struct reg *reg);
+static int ppc476fp_set_fpu_reg(struct reg *reg, uint8_t *buf);
 
-static const struct reg_arch_type ppc476fs_fpu_reg_type = {
-	.get = ppc476fs_get_fpu_reg,
-	.set = ppc476fs_set_fpu_reg
+static const struct reg_arch_type ppc476fp_fpu_reg_type = {
+	.get = ppc476fp_get_fpu_reg,
+	.set = ppc476fp_set_fpu_reg
 };
 
 static const uint32_t coreid_mask[4] = {
@@ -246,12 +246,12 @@ static inline void set_bits_32(uint32_t value, unsigned pos, unsigned len, uint3
 	*dest |= value << pos;
 }
 
-static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
+static inline struct ppc476fp_common *target_to_ppc476fp(struct target *target)
 {
 	return target->arch_info;
 }
 
-static inline struct ppc476fs_tap_ext *target_to_ppc476fs_tap_ext(struct target *target)
+static inline struct ppc476fp_tap_ext *target_to_ppc476fp_tap_ext(struct target *target)
 {
 	return target->tap->priv;
 }
@@ -268,7 +268,7 @@ static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
 // read_data can be null
 static void add_jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint8_t read_data[8])
 {
-	struct ppc476fs_tap_ext *tap_ext = target_to_ppc476fs_tap_ext(target);
+	struct ppc476fp_tap_ext *tap_ext = target_to_ppc476fp_tap_ext(target);
 	struct scan_field instr_field;
 	uint8_t instr_buffer[4];
 	struct scan_field data_fields[1];
@@ -425,13 +425,13 @@ static int write_spr_reg(struct target *target, int spr_num, uint32_t data)
 // the function uses R2 register and does not restore one
 static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	uint32_t value_1;
 	uint32_t value_2;
 	uint32_t code;
 	int ret;
 
-	assert((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) != 0);
+	assert((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) != 0);
 
 	code = 0xD801FFF8 | (reg_num << 21); // stfd Fx, -8(r1)
 	ret = stuff_code(target, code);
@@ -487,14 +487,14 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value)
 // the function uses R2 register and does not restore one
 static int write_DBCR0(struct target *target, uint32_t data)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 
 	ret = write_spr_reg(target, SPR_REG_NUM_DBCR0, data);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ppc476fs->DBCR0_value = data;
+	ppc476fp->DBCR0_value = data;
 
 	return ERROR_OK;
 }
@@ -537,12 +537,12 @@ static int write_MSR(struct target *target, uint32_t value)
 // the function uses R2 register and does not restore one
 static int test_memory_at_stack_internal(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	uint32_t value_1;
 	uint32_t value_2;
 	int ret;
 
-	if ((ppc476fs->saved_R1 < 8) || ((ppc476fs->saved_R1 & 0x3) != 0)) // check the stack pointer
+	if ((ppc476fp->saved_R1 < 8) || ((ppc476fp->saved_R1 & 0x3) != 0)) // check the stack pointer
 		return ERROR_MEMORY_AT_STACK;
 
 	// set magic values to memory
@@ -582,14 +582,14 @@ static int test_memory_at_stack_internal(struct target *target)
 
 static int test_memory_at_stack(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret1;
 	int ret2;
 
 	ret1 = test_memory_at_stack_internal(target);
 
 	// restore R2
-	ret2 = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret2 = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret2 != ERROR_OK)
 		return ret2;
 
@@ -598,7 +598,7 @@ static int test_memory_at_stack(struct target *target)
 
 static int read_required_gen_regs(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct reg *reg;
 	int i;
 	bool R2_used = false;
@@ -608,7 +608,7 @@ static int read_required_gen_regs(struct target *target)
 
 	for (i = 0; i < GPR_REG_COUNT; ++i)
 	{
-		reg = ppc476fs->gpr_regs[i];
+		reg = ppc476fp->gpr_regs[i];
 		if (!reg->valid) {
 			ret = read_gpr_reg(target, i, reg->value);
 			if (ret != ERROR_OK)
@@ -616,86 +616,86 @@ static int read_required_gen_regs(struct target *target)
 			reg->valid = true;
 			reg->dirty = false;
 			if (i == 1)
-				ppc476fs->saved_R1 = get_reg_value_32(reg);
+				ppc476fp->saved_R1 = get_reg_value_32(reg);
 			else if (i == 2)
-				ppc476fs->saved_R2 = get_reg_value_32(reg);
+				ppc476fp->saved_R2 = get_reg_value_32(reg);
 		}
 	}
 
-	if (!ppc476fs->LR_reg->valid) {
+	if (!ppc476fp->LR_reg->valid) {
 		R2_used = true;
-		ret = read_spr_reg(target, SPR_REG_NUM_LR, ppc476fs->LR_reg->value);
+		ret = read_spr_reg(target, SPR_REG_NUM_LR, ppc476fp->LR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->LR_reg->valid = true;
-		ppc476fs->LR_reg->dirty = false;
-		ppc476fs->saved_LR = get_reg_value_32(ppc476fs->LR_reg);
+		ppc476fp->LR_reg->valid = true;
+		ppc476fp->LR_reg->dirty = false;
+		ppc476fp->saved_LR = get_reg_value_32(ppc476fp->LR_reg);
 	}
 
-	if (!ppc476fs->CTR_reg->valid) {
+	if (!ppc476fp->CTR_reg->valid) {
 		R2_used = true;
-		ret = read_spr_reg(target, SPR_REG_NUM_CTR, ppc476fs->CTR_reg->value);
+		ret = read_spr_reg(target, SPR_REG_NUM_CTR, ppc476fp->CTR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->CTR_reg->valid = true;
-		ppc476fs->CTR_reg->dirty = false;
+		ppc476fp->CTR_reg->valid = true;
+		ppc476fp->CTR_reg->dirty = false;
 	}
 
-	if (!ppc476fs->XER_reg->valid) {
+	if (!ppc476fp->XER_reg->valid) {
 		R2_used = true;
-		ret = read_spr_reg(target, SPR_REG_NUM_XER, ppc476fs->XER_reg->value);
+		ret = read_spr_reg(target, SPR_REG_NUM_XER, ppc476fp->XER_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->XER_reg->valid = true;
-		ppc476fs->XER_reg->dirty = false;
+		ppc476fp->XER_reg->valid = true;
+		ppc476fp->XER_reg->dirty = false;
 	}
 
-	if (!ppc476fs->MSR_reg->valid) {
+	if (!ppc476fp->MSR_reg->valid) {
 		R2_used = true;
-		ret = read_MSR(target, ppc476fs->MSR_reg->value);
+		ret = read_MSR(target, ppc476fp->MSR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->MSR_reg->valid = true;
-		ppc476fs->MSR_reg->dirty = false;
+		ppc476fp->MSR_reg->valid = true;
+		ppc476fp->MSR_reg->dirty = false;
 	}
 
-	if (!ppc476fs->CR_reg->valid) {
+	if (!ppc476fp->CR_reg->valid) {
 		R2_used = true;
 		ret = stuff_code(target, 0x7C400026); // mfcr R2
 		if (ret != ERROR_OK)
 			return ret;
-		ret = read_gpr_reg(target, 2, ppc476fs->CR_reg->value);
+		ret = read_gpr_reg(target, 2, ppc476fp->CR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->CR_reg->valid = true;
-		ppc476fs->CR_reg->dirty = false;
+		ppc476fp->CR_reg->valid = true;
+		ppc476fp->CR_reg->dirty = false;
 	}
 
-	if (!ppc476fs->PC_reg->valid) {
+	if (!ppc476fp->PC_reg->valid) {
 		R2_used = true;
 		LR_used = true;
 		ret = stuff_code(target, 0x48000001); // bl $+0
 		if (ret != ERROR_OK)
 			return ret;
 		ret = read_spr_reg(target, SPR_REG_NUM_LR, &value);
-		set_reg_value_32(ppc476fs->PC_reg, value - 4);
+		set_reg_value_32(ppc476fp->PC_reg, value - 4);
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->PC_reg->valid = true;
-		ppc476fs->PC_reg->dirty = false;
+		ppc476fp->PC_reg->valid = true;
+		ppc476fp->PC_reg->dirty = false;
 	}
 
 	// restore LR if it is needed
 	if (LR_used) {
 		R2_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fs->saved_LR);
+		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fp->saved_LR);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	// restore R2 if it is needed
 	if (R2_used) {
-		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 		if (ret != ERROR_OK)
 			return ret;
 	}
@@ -705,7 +705,7 @@ static int read_required_gen_regs(struct target *target)
 
 static int read_required_fpu_regs(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct reg *reg;
 	int i;
 	bool F0_used = false;
@@ -715,29 +715,29 @@ static int read_required_fpu_regs(struct target *target)
 
 	read_need = false;
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
-		if (!ppc476fs->fpr_regs[i]->valid) {
+		if (!ppc476fp->fpr_regs[i]->valid) {
 			read_need = true;
 			break;
 		}
 	}
-	read_need = read_need || !ppc476fs->FPSCR_reg->valid;
+	read_need = read_need || !ppc476fp->FPSCR_reg->valid;
 	if (!read_need)
 		return ERROR_OK;
 
-	if ((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) == 0) {
+	if ((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) == 0) {
 		// FPU is disabled, so set all non-valid FPU register to zeros
 		for (i = 0; i < FPR_REG_COUNT; ++i) {
-			reg = ppc476fs->fpr_regs[i];
+			reg = ppc476fp->fpr_regs[i];
 			if (!reg->valid) {
 				memset(reg->value, 0, 8);
 				reg->valid = true;
 				reg->dirty = false;
 			}
 		}
-		if (!ppc476fs->FPSCR_reg->valid) {
-			set_reg_value_32(ppc476fs->FPSCR_reg, 0);
-			ppc476fs->FPSCR_reg->valid = true;
-			ppc476fs->FPSCR_reg->dirty = false;
+		if (!ppc476fp->FPSCR_reg->valid) {
+			set_reg_value_32(ppc476fp->FPSCR_reg, 0);
+			ppc476fp->FPSCR_reg->valid = true;
+			ppc476fp->FPSCR_reg->dirty = false;
 		}
 		return ERROR_OK;
 	}
@@ -746,17 +746,17 @@ static int read_required_fpu_regs(struct target *target)
 	if (ret == ERROR_MEMORY_AT_STACK) {
 		LOG_WARNING("cannot read FPU registers because of the stark pointer, coreid=%i", target->coreid);
 		for (i = 0; i < FPR_REG_COUNT; ++i) {
-			reg = ppc476fs->fpr_regs[i];
+			reg = ppc476fp->fpr_regs[i];
 			if (!reg->valid) {
 				memset(reg->value, 0, 8);
 				reg->valid = true;
 				reg->dirty = false;
 			}
 		}
-		if (!ppc476fs->FPSCR_reg->valid) {
-			set_reg_value_32(ppc476fs->FPSCR_reg, 0);
-			ppc476fs->FPSCR_reg->valid = true;
-			ppc476fs->FPSCR_reg->dirty = false;
+		if (!ppc476fp->FPSCR_reg->valid) {
+			set_reg_value_32(ppc476fp->FPSCR_reg, 0);
+			ppc476fp->FPSCR_reg->valid = true;
+			ppc476fp->FPSCR_reg->dirty = false;
 		}
 		return ERROR_OK;
 	}
@@ -764,7 +764,7 @@ static int read_required_fpu_regs(struct target *target)
 		return ret;
 
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
-		reg = ppc476fs->fpr_regs[i];
+		reg = ppc476fp->fpr_regs[i];
 		if (!reg->valid) {
 			ret = read_fpr_reg(target, i, (uint64_t*)reg->value);
 			if (ret != ERROR_OK)
@@ -772,30 +772,30 @@ static int read_required_fpu_regs(struct target *target)
 			reg->valid = true;
 			reg->dirty = false;
 			if (i == 0)
-				ppc476fs->saved_F0 = *((uint64_t*)reg->value);
+				ppc476fp->saved_F0 = *((uint64_t*)reg->value);
 		}
 	}
 
-	if (!ppc476fs->FPSCR_reg->valid) {
+	if (!ppc476fp->FPSCR_reg->valid) {
 		F0_used = true;
 		ret = stuff_code(target, 0xFC00048E); // mffs F0
 		if (ret != ERROR_OK)
 			return ret;
 		ret = read_fpr_reg(target, 0, &value);
-		set_reg_value_32(ppc476fs->FPSCR_reg, (uint32_t)(value >> 32));
-		ppc476fs->FPSCR_reg->valid = true;
-		ppc476fs->FPSCR_reg->dirty = false;
+		set_reg_value_32(ppc476fp->FPSCR_reg, (uint32_t)(value >> 32));
+		ppc476fp->FPSCR_reg->valid = true;
+		ppc476fp->FPSCR_reg->dirty = false;
 	}
 
 	// restore F0 if it is needed
 	if (F0_used) {
-		ret = write_fpr_reg(target, 0, ppc476fs->saved_F0);
+		ret = write_fpr_reg(target, 0, ppc476fp->saved_F0);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -804,90 +804,90 @@ static int read_required_fpu_regs(struct target *target)
 
 int write_dirty_gen_regs(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct reg *reg;
 	bool R2_used = false;
 	bool LR_used = false;
 	int i;
 	int ret;
 
-	if (ppc476fs->PC_reg->dirty) {
+	if (ppc476fp->PC_reg->dirty) {
 		R2_used = true;
 		LR_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fs->PC_reg));
+		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fp->PC_reg));
 		if (ret != ERROR_OK)
 			return ret;
 		ret = stuff_code(target, 0x4E800020); // blr
 		if (ret != ERROR_OK)
 			return ret;
-	 	ppc476fs->PC_reg->dirty = false;
+	 	ppc476fp->PC_reg->dirty = false;
 	}
 
-	if (ppc476fs->CR_reg->dirty) {
+	if (ppc476fp->CR_reg->dirty) {
 		R2_used = true;
-		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->CR_reg));
+		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fp->CR_reg));
 		if (ret != ERROR_OK)
 			return ret;
 		ret = stuff_code(target, 0x7C4FF120); // mtcr R2
 		if (ret != ERROR_OK)
 			return ret;
-	 	ppc476fs->CR_reg->dirty = false;
+	 	ppc476fp->CR_reg->dirty = false;
 	}
 
-	if (ppc476fs->MSR_reg->dirty) {
+	if (ppc476fp->MSR_reg->dirty) {
 		R2_used = true;
-		ret = write_MSR(target, get_reg_value_32(ppc476fs->MSR_reg));
+		ret = write_MSR(target, get_reg_value_32(ppc476fp->MSR_reg));
 		if (ret != ERROR_OK)
 			return ret;
-	 	ppc476fs->MSR_reg->dirty = false;
+	 	ppc476fp->MSR_reg->dirty = false;
 	}
 
-	if (ppc476fs->XER_reg->dirty) {
+	if (ppc476fp->XER_reg->dirty) {
 		R2_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_XER, get_reg_value_32(ppc476fs->XER_reg));
+		ret = write_spr_reg(target, SPR_REG_NUM_XER, get_reg_value_32(ppc476fp->XER_reg));
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->XER_reg->dirty = false;
+		ppc476fp->XER_reg->dirty = false;
 	}
 
-	if (ppc476fs->CTR_reg->dirty) {
+	if (ppc476fp->CTR_reg->dirty) {
 		R2_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_CTR, get_reg_value_32(ppc476fs->CTR_reg));
+		ret = write_spr_reg(target, SPR_REG_NUM_CTR, get_reg_value_32(ppc476fp->CTR_reg));
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->CTR_reg->dirty = false;
+		ppc476fp->CTR_reg->dirty = false;
 	}
 
-	if (ppc476fs->LR_reg->dirty) {
+	if (ppc476fp->LR_reg->dirty) {
 		R2_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fs->LR_reg));
+		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fp->LR_reg));
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->LR_reg->dirty = false;
-		ppc476fs->saved_LR = get_reg_value_32(ppc476fs->LR_reg);
+		ppc476fp->LR_reg->dirty = false;
+		ppc476fp->saved_LR = get_reg_value_32(ppc476fp->LR_reg);
 		LR_used = false;
 	}
 
 	// restore LR if it is needed
 	if (LR_used) {
 		R2_used = true;
-		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fs->saved_LR);
+		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fp->saved_LR);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	for (i = 0; i < GPR_REG_COUNT; ++i)
 	{
-		reg = ppc476fs->gpr_regs[i];
+		reg = ppc476fp->gpr_regs[i];
 		if (reg->dirty) {
 			ret = write_gpr_reg(target, i, get_reg_value_32(reg));
 			if (ret != ERROR_OK)
 				return ret;
 			reg->dirty = false;
 			if (i == 1)
-				ppc476fs->saved_R1 = get_reg_value_32(reg);
+				ppc476fp->saved_R1 = get_reg_value_32(reg);
 			else if (i == 2) {
-				ppc476fs->saved_R2 = get_reg_value_32(reg);
+				ppc476fp->saved_R2 = get_reg_value_32(reg);
 				R2_used = false;
 			}
 		}
@@ -895,7 +895,7 @@ int write_dirty_gen_regs(struct target *target)
 
 	// restore R2 if it is needed
 	if (R2_used) {
-		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 		if (ret != ERROR_OK)
 			return ret;
 	}
@@ -905,7 +905,7 @@ int write_dirty_gen_regs(struct target *target)
 
 int write_dirty_fpu_regs(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct reg *reg;
 	bool write_need = false;
 	bool F0_used = false;
@@ -913,50 +913,50 @@ int write_dirty_fpu_regs(struct target *target)
 	int ret;
 
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
-		if (ppc476fs->fpr_regs[i]->dirty) {
+		if (ppc476fp->fpr_regs[i]->dirty) {
 			write_need = true;
 			break;
 		}
 	}
-	write_need = write_need || ppc476fs->FPSCR_reg->dirty;
+	write_need = write_need || ppc476fp->FPSCR_reg->dirty;
 	if (!write_need)
 		return ERROR_OK;
 
-	assert((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) != 0);
+	assert((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) != 0);
 
 	ret = test_memory_at_stack(target);
 	if (ret == ERROR_MEMORY_AT_STACK) {
 		LOG_WARNING("cannot write FPU registers because of the stark pointer, coreid=%i", target->coreid);
 		for (i = 0; i < FPR_REG_COUNT; ++i) {
-			reg = ppc476fs->fpr_regs[i];
+			reg = ppc476fp->fpr_regs[i];
 			reg->dirty = false;
 		}
-		ppc476fs->FPSCR_reg->dirty = false;
+		ppc476fp->FPSCR_reg->dirty = false;
 		return ERROR_OK;
 	}
 	if (ret != ERROR_OK)
 		return ret;
 
-	if (ppc476fs->FPSCR_reg->dirty) {
+	if (ppc476fp->FPSCR_reg->dirty) {
 		F0_used = true;
-		ret = write_fpr_reg(target, 0, (uint64_t)get_reg_value_32(ppc476fs->FPSCR_reg) << 32);
+		ret = write_fpr_reg(target, 0, (uint64_t)get_reg_value_32(ppc476fp->FPSCR_reg) << 32);
 		if (ret != ERROR_OK)
 			return ret;
 		ret = stuff_code(target, 0xFDFE058E); // mtfsf 255, F0
 		if (ret != ERROR_OK)
 			return ret;
-		ppc476fs->FPSCR_reg->dirty = false;
+		ppc476fp->FPSCR_reg->dirty = false;
 	}
 
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
-		reg = ppc476fs->fpr_regs[i];
+		reg = ppc476fp->fpr_regs[i];
 		if (reg->dirty) {
 			ret = write_fpr_reg(target, i, *((uint64_t*)reg->value));
 			if (ret != ERROR_OK)
 				return ret;
 			reg->dirty = false;
 			if (i == 0) {
-				ppc476fs->saved_F0 = *((uint64_t*)reg->value);
+				ppc476fp->saved_F0 = *((uint64_t*)reg->value);
 				F0_used = false;
 			}
 		}
@@ -964,13 +964,13 @@ int write_dirty_fpu_regs(struct target *target)
 
 	// restore F0 if it is needed
 	if (F0_used) {
-		ret = write_fpr_reg(target, 0, ppc476fs->saved_F0);
+		ret = write_fpr_reg(target, 0, ppc476fp->saved_F0);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -987,7 +987,7 @@ static void invalidate_regs_status(struct target *target)
 	}
 }
 
-static int ppc476fs_get_gen_reg(struct reg *reg)
+static int ppc476fp_get_gen_reg(struct reg *reg)
 {
 	struct target *target = reg->arch_info;
 
@@ -1000,11 +1000,11 @@ static int ppc476fs_get_gen_reg(struct reg *reg)
 	return read_required_gen_regs(target);
 }
 
-static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
+static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf)
 {
 	struct target *target = reg->arch_info;
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	uint32_t MSR_prev_value = get_reg_value_32(ppc476fs->MSR_reg);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+	uint32_t MSR_prev_value = get_reg_value_32(ppc476fp->MSR_reg);
 	uint32_t MSR_new_value;
 	size_t i;
 	int ret;	
@@ -1012,7 +1012,7 @@ static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
-	if (reg == ppc476fs->MSR_reg) {
+	if (reg == ppc476fp->MSR_reg) {
 		MSR_new_value = buf_get_u32(buf, 0, 31);
 		if (((MSR_prev_value ^ MSR_new_value) & MSR_FP_MASK) != 0) {
 			ret = write_dirty_fpu_regs(target);
@@ -1022,16 +1022,16 @@ static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
 			ret = write_MSR(target, MSR_new_value);
 			if (ret != ERROR_OK)
 				return ret;
-			ret = write_gpr_reg(target, 2, ppc476fs->saved_R2); // restore R2
+			ret = write_gpr_reg(target, 2, ppc476fp->saved_R2); // restore R2
 			if (ret != ERROR_OK)
 				return ret;
 			// invalidate FPU registers
 			for (i = 0; i < FPR_REG_COUNT; ++i) {
-				ppc476fs->fpr_regs[i]->valid = false;
-				ppc476fs->fpr_regs[i]->dirty = false;
+				ppc476fp->fpr_regs[i]->valid = false;
+				ppc476fp->fpr_regs[i]->dirty = false;
 			}
-			ppc476fs->FPSCR_reg->valid = false;
-			ppc476fs->FPSCR_reg->dirty = false;
+			ppc476fp->FPSCR_reg->valid = false;
+			ppc476fp->FPSCR_reg->dirty = false;
 			// set MSR register status
 			buf_cpy(buf, reg->value, reg->size);
 			reg->valid = true;
@@ -1047,7 +1047,7 @@ static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
 	return ERROR_OK;
 }
 
-static int ppc476fs_get_fpu_reg(struct reg *reg)
+static int ppc476fp_get_fpu_reg(struct reg *reg)
 {
 	struct target *target = reg->arch_info;
 
@@ -1060,15 +1060,15 @@ static int ppc476fs_get_fpu_reg(struct reg *reg)
 	return read_required_fpu_regs(target);
 }
 
-static int ppc476fs_set_fpu_reg(struct reg *reg, uint8_t *buf)
+static int ppc476fp_set_fpu_reg(struct reg *reg, uint8_t *buf)
 {
 	struct target *target = reg->arch_info;
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
-	if ((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) == 0)
+	if ((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) == 0)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 
 	buf_cpy(buf, reg->value, reg->size);
@@ -1088,10 +1088,10 @@ static struct reg *fill_reg(
 	const struct reg_arch_type *arch_type,
 	const char *feature_name)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	size_t storage_size;
 
-	ppc476fs->all_regs[all_index] = reg;
+	ppc476fp->all_regs[all_index] = reg;
 
 	reg->name = reg_name;
 	reg->number = all_index;
@@ -1114,7 +1114,7 @@ static struct reg *fill_reg(
 
 static void build_reg_caches(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct reg_cache *gen_cache = calloc(1, sizeof(struct reg_cache));
 	struct reg_cache *fpu_cache = calloc(1, sizeof(struct reg_cache));
 	int all_index = 0;
@@ -1138,21 +1138,21 @@ static void build_reg_caches(struct target *target)
 
 	for (i = 0; i < GPR_REG_COUNT; ++i) {
 		sprintf(reg_name, "R%i", i);
-		ppc476fs->gpr_regs[i] = fill_reg(target, all_index++, gen_regs++, strdup(reg_name), REG_TYPE_UINT32, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core"); // R0-R31
+		ppc476fp->gpr_regs[i] = fill_reg(target, all_index++, gen_regs++, strdup(reg_name), REG_TYPE_UINT32, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core"); // R0-R31
 	}
 
 	for (i = 0; i < FPR_REG_COUNT; ++i) {
 		sprintf(reg_name, "F%i", i);
-		ppc476fs->fpr_regs[i] = fill_reg(target, all_index++, fpu_regs++, strdup(reg_name), REG_TYPE_IEEE_DOUBLE, 64, &ppc476fs_fpu_reg_type, "org.gnu.gdb.power.fpu"); // F0-R31
+		ppc476fp->fpr_regs[i] = fill_reg(target, all_index++, fpu_regs++, strdup(reg_name), REG_TYPE_IEEE_DOUBLE, 64, &ppc476fp_fpu_reg_type, "org.gnu.gdb.power.fpu"); // F0-R31
 	}
 
-	ppc476fs->PC_reg = fill_reg(target, all_index++, gen_regs++, "PC", REG_TYPE_CODE_PTR, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core");
-	ppc476fs->MSR_reg = fill_reg(target, all_index++, gen_regs++, "MSR", REG_TYPE_UINT32, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core");
-	ppc476fs->CR_reg = fill_reg(target, all_index++, gen_regs++, "CR", REG_TYPE_UINT32, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core");
-	ppc476fs->LR_reg = fill_reg(target, all_index++, gen_regs++, "LR", REG_TYPE_CODE_PTR, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core");
-	ppc476fs->CTR_reg = fill_reg(target, all_index++, gen_regs++, "CTR", REG_TYPE_UINT32, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core");
-	ppc476fs->XER_reg = fill_reg(target, all_index++, gen_regs++, "XER", REG_TYPE_UINT32, 32, &ppc476fs_gen_reg_type, "org.gnu.gdb.power.core");
-	ppc476fs->FPSCR_reg = fill_reg(target, all_index++, fpu_regs++, "FPSCR", REG_TYPE_UINT32, 32, &ppc476fs_fpu_reg_type, "org.gnu.gdb.power.fpu");
+	ppc476fp->PC_reg = fill_reg(target, all_index++, gen_regs++, "PC", REG_TYPE_CODE_PTR, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+	ppc476fp->MSR_reg = fill_reg(target, all_index++, gen_regs++, "MSR", REG_TYPE_UINT32, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+	ppc476fp->CR_reg = fill_reg(target, all_index++, gen_regs++, "CR", REG_TYPE_UINT32, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+	ppc476fp->LR_reg = fill_reg(target, all_index++, gen_regs++, "LR", REG_TYPE_CODE_PTR, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+	ppc476fp->CTR_reg = fill_reg(target, all_index++, gen_regs++, "CTR", REG_TYPE_UINT32, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+	ppc476fp->XER_reg = fill_reg(target, all_index++, gen_regs++, "XER", REG_TYPE_UINT32, 32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+	ppc476fp->FPSCR_reg = fill_reg(target, all_index++, fpu_regs++, "FPSCR", REG_TYPE_UINT32, 32, &ppc476fp_fpu_reg_type, "org.gnu.gdb.power.fpu");
 
 	assert(all_index == ALL_REG_COUNT);
 	assert(gen_regs - gen_cache->reg_list == GEN_CACHE_REG_COUNT);
@@ -1164,7 +1164,7 @@ static void build_reg_caches(struct target *target)
 // the function uses R2 register and does not restore one
 static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int iac_index = 0;
 	uint32_t iac_mask;
 	int ret;
@@ -1173,16 +1173,16 @@ static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
 
 	while (true) {
 		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
-		if ((ppc476fs->DBCR0_value & iac_mask) != 0)
+		if ((ppc476fp->DBCR0_value & iac_mask) != 0)
 		{
-			if (ppc476fs->IAC_value[iac_index] == (uint32_t)bp->address)
+			if (ppc476fp->IAC_value[iac_index] == (uint32_t)bp->address)
 				break;
 		}
 		++iac_index;
 		assert(iac_index < HW_BP_NUMBER);
 	}
 
-	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~iac_mask);
+	ret = write_DBCR0(target, ppc476fp->DBCR0_value & ~iac_mask);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1230,7 +1230,7 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp)
 
 static int unset_all_soft_breakpoints(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct breakpoint *bp;
 	int ret;
 
@@ -1244,12 +1244,12 @@ static int unset_all_soft_breakpoints(struct target *target)
 	}
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1259,7 +1259,7 @@ static int unset_all_soft_breakpoints(struct target *target)
 // the function uses R2 register and does not restore one
 static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int iac_index = 0;
 	uint32_t iac_mask;
 	int ret;
@@ -1268,7 +1268,7 @@ static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 
 	while (true) {
 		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
-		if ((ppc476fs->DBCR0_value & iac_mask) == 0)
+		if ((ppc476fp->DBCR0_value & iac_mask) == 0)
 			break;
 		++iac_index;
 		assert(iac_index < HW_BP_NUMBER);
@@ -1277,9 +1277,9 @@ static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, (uint32_t)bp->address);
 	if (ret != ERROR_OK)
 		return ret;
-	ppc476fs->IAC_value[iac_index] = (uint32_t)bp->address;
+	ppc476fp->IAC_value[iac_index] = (uint32_t)bp->address;
 
-	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask);
+	ret = write_DBCR0(target, ppc476fp->DBCR0_value | iac_mask);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1332,7 +1332,7 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp)
 
 static int enable_breakpoints(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct breakpoint *bp = target->breakpoints;
 	bool R1_used = false;
 	bool R2_used = false;
@@ -1356,14 +1356,14 @@ static int enable_breakpoints(struct target *target)
 
 	// restore R1 if it is needed
 	if (R1_used) {
-		ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+		ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	// restore R2 if it is needed
 	if (R2_used) {
-		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 		if (ret != ERROR_OK)
 			return ret;
 	}
@@ -1374,10 +1374,10 @@ static int enable_breakpoints(struct target *target)
 // the DAC fields in DBCR0 register must be cleared before the function call
 static void invalidate_hw_breakpoints(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct breakpoint *bp = target->breakpoints;
 
-	assert((ppc476fs->DBCR0_value & DBCR0_IACX_MASK) == 0);
+	assert((ppc476fp->DBCR0_value & DBCR0_IACX_MASK) == 0);
 
 	while (bp != NULL) {
 		if (bp->type == BKPT_HARD)
@@ -1408,7 +1408,7 @@ static int add_hw_breakpoint(struct target *target, struct breakpoint *breakpoin
 
 static int unset_watchpoint(struct target *target, struct watchpoint *wp)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int dac_index = 0;
 	uint32_t dacr_mask;
 	uint32_t dacw_mask;
@@ -1419,21 +1419,21 @@ static int unset_watchpoint(struct target *target, struct watchpoint *wp)
 	while (true) {
 		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
 		dacw_mask = (DBCR0_DAC1W_MASK >> (dac_index * 2));
-		if ((ppc476fs->DBCR0_value & (dacr_mask | dacw_mask)) != 0)
+		if ((ppc476fp->DBCR0_value & (dacr_mask | dacw_mask)) != 0)
 		{
-			if (ppc476fs->DAC_value[dac_index] == (uint32_t)wp->address)
+			if (ppc476fp->DAC_value[dac_index] == (uint32_t)wp->address)
 				break;
 		}
 		++dac_index;
 		assert(dac_index < WP_NUMBER);
 	}
 
-	ret = write_DBCR0(target, ppc476fs->DBCR0_value & ~(dacr_mask | dacw_mask));
+	ret = write_DBCR0(target, ppc476fp->DBCR0_value & ~(dacr_mask | dacw_mask));
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1445,7 +1445,7 @@ static int unset_watchpoint(struct target *target, struct watchpoint *wp)
 // the function uses R2 register and does not restore one
 static int set_watchpoint(struct target *target, struct watchpoint *wp)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 	int dac_index = 0;
 	uint32_t dacr_mask;
@@ -1457,7 +1457,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 	while (true) {
 		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
 		dacw_mask = (DBCR0_DAC1W_MASK >> (dac_index * 2));
-		if ((ppc476fs->DBCR0_value & (dacr_mask | dacw_mask)) == 0)
+		if ((ppc476fp->DBCR0_value & (dacr_mask | dacw_mask)) == 0)
 			break;
 		++dac_index;
 		assert(dac_index < WP_NUMBER);
@@ -1466,7 +1466,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 	ret = write_spr_reg(target, SPR_REG_NUM_DAC_BASE + dac_index, (uint32_t)wp->address);
 	if (ret != ERROR_OK)
 		return ret;
-	ppc476fs->DAC_value[dac_index] = (uint32_t)wp->address;
+	ppc476fp->DAC_value[dac_index] = (uint32_t)wp->address;
 
 	switch (wp->rw)
 	{
@@ -1483,7 +1483,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 			assert(false);
 	}
 
-	ret = write_DBCR0(target, ppc476fs->DBCR0_value | dac_mask);
+	ret = write_DBCR0(target, ppc476fp->DBCR0_value | dac_mask);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1494,7 +1494,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 
 static int enable_watchpoints(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct watchpoint *wp = target->watchpoints;
 	bool R2_used = false;
 	int ret;
@@ -1511,7 +1511,7 @@ static int enable_watchpoints(struct target *target)
 
 	// restore R2 if it is needed
 	if (R2_used) {
-		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 		if (ret != ERROR_OK)
 			return ret;
 	}
@@ -1521,10 +1521,10 @@ static int enable_watchpoints(struct target *target)
 
 static void invalidate_watchpoints(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct watchpoint *wp = target->watchpoints;
 
-	assert((ppc476fs->DBCR0_value & DBCR0_DACX_MASK) == 0);
+	assert((ppc476fp->DBCR0_value & DBCR0_DACX_MASK) == 0);
 
 	while (wp != NULL) {
 		wp->set = 0;
@@ -1534,11 +1534,11 @@ static void invalidate_watchpoints(struct target *target)
 
 static void invalidate_tlb_cache(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int i;
 
 	for (i = 0; i < TLB_NUMBER; ++i)
-		ppc476fs->tlb_cache[i].loaded = false;
+		ppc476fp->tlb_cache[i].loaded = false;
 }
 
 static int save_state(struct target *target)
@@ -1585,7 +1585,7 @@ static int restore_state(struct target *target)
 
 static int restore_state_before_run(struct target *target, int current, target_addr_t address, enum target_debug_reason  debug_reason)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 
 	if (target->state != TARGET_HALTED) {
@@ -1595,9 +1595,9 @@ static int restore_state_before_run(struct target *target, int current, target_a
 
 	// current = 1: continue on current pc, otherwise continue at <address>
 	if (!current) {
-		set_reg_value_32(ppc476fs->PC_reg, (uint32_t)address);
-		ppc476fs->PC_reg->valid = true;
-		ppc476fs->PC_reg->dirty = true;
+		set_reg_value_32(ppc476fp->PC_reg, (uint32_t)address);
+		ppc476fp->PC_reg->valid = true;
+		ppc476fp->PC_reg->dirty = true;
 	}
 
 	target->debug_reason = debug_reason;
@@ -1611,7 +1611,7 @@ static int restore_state_before_run(struct target *target, int current, target_a
 
 static int save_state_and_init_debug(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 
 	ret = save_state(target);
@@ -1632,7 +1632,7 @@ static int save_state_and_init_debug(struct target *target)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1645,7 +1645,7 @@ static int save_state_and_init_debug(struct target *target)
 
 static int reset_and_halt(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	uint32_t value_JDSR;
 	int i;
 	int ret;
@@ -1654,7 +1654,7 @@ static int reset_and_halt(struct target *target)
 	
 	target->state = TARGET_RESET;
 	invalidate_regs_status(target); // if an error occurs
-	ppc476fs->DBCR0_value = 0;
+	ppc476fp->DBCR0_value = 0;
 	invalidate_hw_breakpoints(target); // if an error occurs
 	invalidate_watchpoints(target); // if an error occurs
 
@@ -1688,7 +1688,7 @@ static int reset_and_halt(struct target *target)
 
 static int examine_internal(struct target *target)
 {
-	struct ppc476fs_tap_ext *tap_ext = target_to_ppc476fs_tap_ext(target);
+	struct ppc476fp_tap_ext *tap_ext = target_to_ppc476fp_tap_ext(target);
 	uint32_t JDSR_value;
 	bool is_running;
 	int ret;
@@ -1936,17 +1936,17 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 
 static int load_uncached_tlb(struct target *target, int index_way)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 
-	if (ppc476fs->tlb_cache[index_way].loaded)
+	if (ppc476fp->tlb_cache[index_way].loaded)
 		return ERROR_OK;
 
-	ret = load_tlb(target, index_way, &ppc476fs->tlb_cache[index_way].hw);
+	ret = load_tlb(target, index_way, &ppc476fp->tlb_cache[index_way].hw);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ppc476fs->tlb_cache[index_way].loaded = true;
+	ppc476fp->tlb_cache[index_way].loaded = true;
 
 	return ERROR_OK;
 }
@@ -2075,11 +2075,11 @@ static int init_phys_mem(struct target *target, struct phys_mem_state *state)
 
 static int restore_phys_mem(struct target *target, struct phys_mem_state *state)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 
 	// restore TLB record
-	ret = write_tlb(target, PHYS_MEM_TLB_INDEX_WAY, &ppc476fs->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].hw);
+	ret = write_tlb(target, PHYS_MEM_TLB_INDEX_WAY, &ppc476fp->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].hw);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2109,12 +2109,12 @@ static int restore_phys_mem(struct target *target, struct phys_mem_state *state)
 		return ret;
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2284,7 +2284,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[], struct tl
 
 static int handle_tlb_dump_command_internal(struct command_invocation *cmd, struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct tlb_sort_record records[TLB_NUMBER];
 	uint32_t saved_MMUCR;
 	uint32_t value_SSPCR;
@@ -2319,21 +2319,21 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 		return ret;
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// process only valid records
 	record_count = 0;
 	for (i = 0; i < TLB_NUMBER; ++i) {
-		if ((ppc476fs->tlb_cache[i].hw.data[0] & TLB_0_V_MASK) != 0) {
+		if ((ppc476fp->tlb_cache[i].hw.data[0] & TLB_0_V_MASK) != 0) {
 			records[record_count].index_way = i;
-			records[record_count++].hw = ppc476fs->tlb_cache[i].hw;
+			records[record_count++].hw = ppc476fp->tlb_cache[i].hw;
 		}
 	}
 
@@ -2350,7 +2350,7 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 
 static int handle_tlb_create_command_internal(struct command_invocation *cmd, struct target *target, struct tlb_command_params *params)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct tlb_hw_record hw;
 	uint32_t saved_MMUCR;
 	int index;
@@ -2397,7 +2397,7 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 			ret = load_uncached_tlb(target, index_way);
 			if (ret != ERROR_OK)
 				return ret;
-			if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
+			if ((ppc476fp->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
 				break;
 		}
 		if (way > 3) {
@@ -2410,7 +2410,7 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	ret = load_uncached_tlb(target, index_way);
 	if (ret != ERROR_OK)
 		return ret;
-	if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) != 0) {
+	if ((ppc476fp->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) != 0) {
 			LOG_ERROR("the defined way is not free");
 			return ERROR_FAIL;
 	}
@@ -2449,13 +2449,13 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 		return ret;
 
 	// invalidate and reload UTLB record
-	ppc476fs->tlb_cache[index_way].loaded = false;
+	ppc476fp->tlb_cache[index_way].loaded = false;
 	ret = load_uncached_tlb(target, index_way);
 	if (ret != ERROR_OK)
 		return ret;
 
 	print_tlb_table_header(CMD);
-	print_tlb_table_record(CMD, index_way, &ppc476fs->tlb_cache[index_way].hw);
+	print_tlb_table_record(CMD, index_way, &ppc476fp->tlb_cache[index_way].hw);
 
 	// restore MMUCR
 	ret = write_spr_reg(target, SPR_REG_NUM_MMUCR, saved_MMUCR);
@@ -2463,12 +2463,12 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 		return ret;
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2477,7 +2477,7 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 
 static int handle_tlb_drop_command_internal(struct command_invocation *cmd, struct target *target, struct tlb_command_params *params)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct tlb_hw_record hw;
 	uint32_t saved_MMUCR;
 	uint32_t ts;
@@ -2498,17 +2498,17 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd, stru
 		if (ret != ERROR_OK)
 			return ret;
 
-		if ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
+		if ((ppc476fp->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
 			continue;
-		if (ppc476fs->tlb_cache[index_way].hw.tid != params->tid)
+		if (ppc476fp->tlb_cache[index_way].hw.tid != params->tid)
 			continue;
-		if (get_bits_32(ppc476fs->tlb_cache[index_way].hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN) != params->epn)
+		if (get_bits_32(ppc476fp->tlb_cache[index_way].hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN) != params->epn)
 			continue;
-		ts = ((ppc476fs->tlb_cache[index_way].hw.data[0] & TLB_0_TS_MASK) != 0);
+		ts = ((ppc476fp->tlb_cache[index_way].hw.data[0] & TLB_0_TS_MASK) != 0);
 		if (ts != params->ts)
 			continue;
 
-		ppc476fs->tlb_cache[index_way].loaded = false;
+		ppc476fp->tlb_cache[index_way].loaded = false;
 		ret = write_tlb(target, index_way, &hw);
 		if (ret != ERROR_OK)
 			return ret;
@@ -2520,7 +2520,7 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd, stru
 
 		if (count == 0)
 			print_tlb_table_header(CMD);
-		print_tlb_table_record(CMD, index_way, &ppc476fs->tlb_cache[index_way].hw);
+		print_tlb_table_record(CMD, index_way, &ppc476fp->tlb_cache[index_way].hw);
 		++count;
 	}
 
@@ -2530,12 +2530,12 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd, stru
 		return ret;
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2549,7 +2549,7 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd, stru
 
 static int handle_tlb_drop_all_command_internal(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	struct tlb_hw_record hw;
 	uint32_t saved_MMUCR;
 	int i;
@@ -2581,21 +2581,21 @@ static int handle_tlb_drop_all_command_internal(struct target *target)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	return ERROR_OK;
 }
 
-static int ppc476fs_poll(struct target *target)
+static int ppc476fp_poll(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	enum target_state prev_state = target->state;
 	uint32_t JDSR_value, DBSR_value;
 	int ret;
@@ -2623,7 +2623,7 @@ static int ppc476fs_poll(struct target *target)
 			return ret;
 
 		// restore R2
-		ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+		ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 		if (ret != ERROR_OK)
 			return ret;
 
@@ -2649,19 +2649,19 @@ static int ppc476fs_poll(struct target *target)
 }
 
 // call only then the target is halted
-int ppc476fs_arch_state(struct target *target)
+int ppc476fp_arch_state(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 
 	LOG_USER("target halted due to %s, coreid=%i, PC: 0x%08X",
 		debug_reason_name(target),
 		target->coreid,
-		get_reg_value_32(ppc476fs->PC_reg));
+		get_reg_value_32(ppc476fp->PC_reg));
 
 	return ERROR_OK;
 }
 
-static int ppc476fs_halt(struct target *target)
+static int ppc476fp_halt(struct target *target)
 {
 	int ret;
 
@@ -2684,7 +2684,7 @@ static int ppc476fs_halt(struct target *target)
 	return ERROR_OK;
 }
 
-static int ppc476fs_resume(struct target *target, int current, target_addr_t address, int handle_breakpoints, int debug_execution)
+static int ppc476fp_resume(struct target *target, int current, target_addr_t address, int handle_breakpoints, int debug_execution)
 {
 	LOG_DEBUG("coreid=%i", target->coreid);
 
@@ -2708,7 +2708,7 @@ static int ppc476fs_resume(struct target *target, int current, target_addr_t add
 	return ERROR_OK;
 }
 
-static int ppc476fs_step(struct target *target, int current, target_addr_t address, int handle_breakpoints)
+static int ppc476fp_step(struct target *target, int current, target_addr_t address, int handle_breakpoints)
 {
 	LOG_DEBUG("coreid=%i", target->coreid);
 
@@ -2726,7 +2726,7 @@ static int ppc476fs_step(struct target *target, int current, target_addr_t addre
 	return ERROR_OK;
 }
 
-static int ppc476fs_assert_reset(struct target *target)
+static int ppc476fp_assert_reset(struct target *target)
 {
 	LOG_DEBUG("coreid=%i", target->coreid);
 
@@ -2738,7 +2738,7 @@ static int ppc476fs_assert_reset(struct target *target)
 	return ERROR_OK;
 }
 
-static int ppc476fs_deassert_reset(struct target *target)
+static int ppc476fp_deassert_reset(struct target *target)
 {
 	int ret;
 
@@ -2761,9 +2761,9 @@ static int ppc476fs_deassert_reset(struct target *target)
 	return ERROR_OK;
 }
 
-static int ppc476fs_soft_reset_halt(struct target *target)
+static int ppc476fp_soft_reset_halt(struct target *target)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 	
 	LOG_DEBUG("coreid=%i", target->coreid);
@@ -2773,10 +2773,10 @@ static int ppc476fs_soft_reset_halt(struct target *target)
 		return ret;
 
 	// restore a register state after the reset
-	set_reg_value_32(ppc476fs->PC_reg, 0xFFFFFFC);
-	ppc476fs->PC_reg->dirty = true;
-	set_reg_value_32(ppc476fs->MSR_reg, 0);
-	ppc476fs->MSR_reg->dirty = true;
+	set_reg_value_32(ppc476fp->PC_reg, 0xFFFFFFC);
+	ppc476fp->PC_reg->dirty = true;
+	set_reg_value_32(ppc476fp->MSR_reg, 0);
+	ppc476fp->MSR_reg->dirty = true;
 	// [***] other register must be restored - otherwise the soft reset does not work
 
 	// restore state with breakpoints
@@ -2787,21 +2787,21 @@ static int ppc476fs_soft_reset_halt(struct target *target)
 	return ERROR_OK;
 }
 
-static int ppc476fs_get_gdb_reg_list(struct target *target, struct reg **reg_list[], int *reg_list_size, enum target_register_class reg_class)
+static int ppc476fp_get_gdb_reg_list(struct target *target, struct reg **reg_list[], int *reg_list_size, enum target_register_class reg_class)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target); 
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target); 
 
 	*reg_list_size = GDB_REG_COUNT;
 	*reg_list = malloc(sizeof(struct reg *) * GDB_REG_COUNT);
-	memcpy(*reg_list, ppc476fs->all_regs, sizeof(struct reg *) * GDB_REG_COUNT);
+	memcpy(*reg_list, ppc476fp->all_regs, sizeof(struct reg *) * GDB_REG_COUNT);
 
 	return ERROR_OK;
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
-static int ppc476fs_read_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, uint8_t *buffer)
+static int ppc476fp_read_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, uint8_t *buffer)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	uint32_t i;
 	int ret;
 
@@ -2833,12 +2833,12 @@ static int ppc476fs_read_memory(struct target *target, target_addr_t address, ui
 	}
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2846,9 +2846,9 @@ static int ppc476fs_read_memory(struct target *target, target_addr_t address, ui
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
-static int ppc476fs_write_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
+static int ppc476fp_write_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	uint32_t i;
 	int ret;
 
@@ -2877,24 +2877,24 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 	// the JTAG queue will be executed druring the registers restoing
 
 	// restore R1
-	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
 	return ERROR_OK;	
 }
 
-static int ppc476fs_checksum_memory(struct target *target, target_addr_t address, uint32_t count, uint32_t *checksum)
+static int ppc476fp_checksum_memory(struct target *target, target_addr_t address, uint32_t count, uint32_t *checksum)
 {
 	return ERROR_FAIL;
 }
 
-static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
+static int ppc476fp_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
 	int ret;
 
@@ -2921,9 +2921,9 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 	return ERROR_OK;
 }
 
-static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *breakpoint)
+static int ppc476fp_remove_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 	int ret;
 
 	LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid, breakpoint->address, breakpoint->type, breakpoint->length);
@@ -2943,20 +2943,20 @@ static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *
 		if (ret != ERROR_OK)
 			return ret;
 		// restore R1
-		ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+		ret = write_gpr_reg(target, 1, ppc476fp->saved_R1);
 		if (ret != ERROR_OK)
 			return ret;
 	}
 
 	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	ret = write_gpr_reg(target, 2, ppc476fp->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
 	return ERROR_OK;
 }
 
-static int ppc476fs_add_watchpoint(struct target *target, struct watchpoint *watchpoint)
+static int ppc476fp_add_watchpoint(struct target *target, struct watchpoint *watchpoint)
 {
 	struct watchpoint *wp;
 	int wp_count;
@@ -2985,7 +2985,7 @@ static int ppc476fs_add_watchpoint(struct target *target, struct watchpoint *wat
 	return ERROR_OK;
 }
 
-static int ppc476fs_remove_watchpoint(struct target *target, struct watchpoint *watchpoint)
+static int ppc476fp_remove_watchpoint(struct target *target, struct watchpoint *watchpoint)
 {
 	int ret;
 
@@ -3005,10 +3005,10 @@ static int ppc476fs_remove_watchpoint(struct target *target, struct watchpoint *
 	return ERROR_OK;
 }
 
-static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
+static int ppc476fp_target_create(struct target *target, Jim_Interp *interp)
 {
-	struct ppc476fs_common *ppc476fs = calloc(1, sizeof(struct ppc476fs_common));
-	target->arch_info = ppc476fs;
+	struct ppc476fp_common *ppc476fp = calloc(1, sizeof(struct ppc476fp_common));
+	target->arch_info = ppc476fp;
 
 	LOG_DEBUG("coreid=%i", target->coreid);
 
@@ -3020,14 +3020,14 @@ static int ppc476fs_target_create(struct target *target, Jim_Interp *interp)
 	return ERROR_OK;
 }
 
-static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *target)
+static int ppc476fp_init_target(struct command_context *cmd_ctx, struct target *target)
 {
 	LOG_DEBUG("coreid=%i", target->coreid);
 
 	build_reg_caches(target);
 
 	if (target->tap->priv == NULL) {
-		struct ppc476fs_tap_ext *tap_ext = malloc(sizeof(struct ppc476fs_tap_ext));
+		struct ppc476fp_tap_ext *tap_ext = malloc(sizeof(struct ppc476fp_tap_ext));
 		tap_ext->last_coreid = -1;
 		target->tap->priv = tap_ext;
 		LOG_DEBUG("The TAP extera struct has been created, coreid=%i", target->coreid);
@@ -3039,7 +3039,7 @@ static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *
 	return ERROR_OK;
 }
 
-static int ppc476fs_examine(struct target *target)
+static int ppc476fp_examine(struct target *target)
 {
 	int ret;
 
@@ -3056,7 +3056,7 @@ static int ppc476fs_examine(struct target *target)
 	return ERROR_OK;
 }
 
-static int ppc476fs_virt2phys(struct target *target, target_addr_t address, target_addr_t *physical)
+static int ppc476fp_virt2phys(struct target *target, target_addr_t address, target_addr_t *physical)
 {
 	LOG_DEBUG("coreid=%i", target->coreid);
 
@@ -3066,7 +3066,7 @@ static int ppc476fs_virt2phys(struct target *target, target_addr_t address, targ
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
-static int ppc476fs_read_phys_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, uint8_t *buffer)
+static int ppc476fp_read_phys_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	struct phys_mem_state state;
 	uint32_t last_ERPN_RPN = -1; // not setuped yet 
@@ -3123,7 +3123,7 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG communication BUG
-static int ppc476fs_write_phys_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
+static int ppc476fp_write_phys_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
 	struct phys_mem_state state;
 	uint32_t last_ERPN_RPN = -1; // not setuped yet 
@@ -3175,13 +3175,13 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 	return ERROR_OK;
 }
 
-static int ppc476fs_mmu(struct target *target, int *enabled)
+static int ppc476fp_mmu(struct target *target, int *enabled)
 {
 	*enabled = 1;
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ppc476fs_handle_tlb_dump_command)
+COMMAND_HANDLER(ppc476fp_handle_tlb_dump_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	int ret;
@@ -3203,7 +3203,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_dump_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ppc476fs_handle_tlb_create_command)
+COMMAND_HANDLER(ppc476fp_handle_tlb_create_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	struct tlb_command_params params;
@@ -3234,7 +3234,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_create_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ppc476fs_handle_tlb_drop_command)
+COMMAND_HANDLER(ppc476fp_handle_tlb_drop_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	struct tlb_command_params params;
@@ -3265,7 +3265,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_drop_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ppc476fs_handle_tlb_drop_all_command)
+COMMAND_HANDLER(ppc476fp_handle_tlb_drop_all_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	int ret;
@@ -3284,7 +3284,7 @@ COMMAND_HANDLER(ppc476fs_handle_tlb_drop_all_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ppc476fs_handle_status_command)
+COMMAND_HANDLER(ppc476fp_handle_status_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	uint32_t JDSR_value;
@@ -3305,7 +3305,7 @@ COMMAND_HANDLER(ppc476fs_handle_status_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ppc476fs_handle_jtag_speed_command)
+COMMAND_HANDLER(ppc476fp_handle_jtag_speed_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	int64_t start_time = timeval_ms();
@@ -3327,10 +3327,10 @@ COMMAND_HANDLER(ppc476fs_handle_jtag_speed_command)
 	return ERROR_OK;
 }
 
-static const struct command_registration ppc476fs_tlb_drop_command_handlers[] = {
+static const struct command_registration ppc476fp_tlb_drop_command_handlers[] = {
 	{
 		.name = "all",
-		.handler = ppc476fs_handle_tlb_drop_all_command,
+		.handler = ppc476fp_handle_tlb_drop_all_command,
 		.mode = COMMAND_EXEC,
 		.usage = "",
 		.help = "delete all UTLB records"
@@ -3338,51 +3338,51 @@ static const struct command_registration ppc476fs_tlb_drop_command_handlers[] = 
 	COMMAND_REGISTRATION_DONE
 };
 
-static const struct command_registration ppc476fs_tlb_exec_command_handlers[] = {
+static const struct command_registration ppc476fp_tlb_exec_command_handlers[] = {
 	{
 		.name = "dump",
-		.handler = ppc476fs_handle_tlb_dump_command,
+		.handler = ppc476fp_handle_tlb_dump_command,
 		.mode = COMMAND_EXEC,
 		.usage = "",
 		.help = "dump all valid UTLB records"
 	},
 	{
 		.name = "create",
-		.handler = ppc476fs_handle_tlb_create_command,
+		.handler = ppc476fp_handle_tlb_create_command,
 		.mode = COMMAND_EXEC,
 		.usage = "epn=<xxx> rpn=<xxx> [erpn=0] [tid=0] [ts=0] [dsiz=4k] [way=auto] [bltd=0] [il1i=0] [il1d=0] [u=0] [wimg=0] [en=BE] [uxwr=0] [sxwr=0]",
 		.help = "create new UTLB record"
 	},
 	{
 		.name = "drop",
-		.handler = ppc476fs_handle_tlb_drop_command,
+		.handler = ppc476fp_handle_tlb_drop_command,
 		.mode = COMMAND_EXEC,
 		.usage = "epn=<xxx> [tid=0] [ts=0]",
 		.help = "delete UTLB record",
-		.chain = ppc476fs_tlb_drop_command_handlers
+		.chain = ppc476fp_tlb_drop_command_handlers
 	},
 	COMMAND_REGISTRATION_DONE
 };
 
-static const struct command_registration ppc476fs_exec_command_handlers[] = {
+static const struct command_registration ppc476fp_exec_command_handlers[] = {
 	{
 		.name = "tlb",
-		.handler = ppc476fs_handle_tlb_dump_command,
+		.handler = ppc476fp_handle_tlb_dump_command,
 		.mode = COMMAND_EXEC,
 		.usage = "",
-		.help = "ppc476fs tlb command group",
-		.chain = ppc476fs_tlb_exec_command_handlers
+		.help = "ppc476fp tlb command group",
+		.chain = ppc476fp_tlb_exec_command_handlers
 	},
 	{
 		.name = "status",
-		.handler = ppc476fs_handle_status_command,
+		.handler = ppc476fp_handle_status_command,
 		.mode = COMMAND_EXEC,
 		.usage = "",
 		.help = "display status"
 	},
 	{
 		.name = "jtag_speed",
-		.handler = ppc476fs_handle_jtag_speed_command,
+		.handler = ppc476fp_handle_jtag_speed_command,
 		.mode = COMMAND_EXEC,
 		.usage = "",
 		.help = "display jtag speed (transaction per second)"
@@ -3390,50 +3390,50 @@ static const struct command_registration ppc476fs_exec_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-const struct command_registration ppc476fs_command_handlers[] = {
+const struct command_registration ppc476fp_command_handlers[] = {
 	{
-		.name = "ppc476fs",
+		.name = "ppc476fp",
 		.mode = COMMAND_ANY,
-		.help = "ppc476fs command group",
+		.help = "ppc476fp command group",
 		.usage = "",
-		.chain = ppc476fs_exec_command_handlers
+		.chain = ppc476fp_exec_command_handlers
 	},
 	COMMAND_REGISTRATION_DONE
 };
 
-struct target_type ppc476fs_target = {
-	.name = "ppc476fs",
+struct target_type ppc476fp_target = {
+	.name = "ppc476fp",
 
-	.poll = ppc476fs_poll,
-	.arch_state = ppc476fs_arch_state,
+	.poll = ppc476fp_poll,
+	.arch_state = ppc476fp_arch_state,
 
-	.halt = ppc476fs_halt,
-	.resume = ppc476fs_resume,
-	.step = ppc476fs_step,
+	.halt = ppc476fp_halt,
+	.resume = ppc476fp_resume,
+	.step = ppc476fp_step,
 
-	.assert_reset = ppc476fs_assert_reset,
-	.deassert_reset = ppc476fs_deassert_reset,
-	.soft_reset_halt = ppc476fs_soft_reset_halt,
+	.assert_reset = ppc476fp_assert_reset,
+	.deassert_reset = ppc476fp_deassert_reset,
+	.soft_reset_halt = ppc476fp_soft_reset_halt,
 
-	.get_gdb_reg_list = ppc476fs_get_gdb_reg_list,
+	.get_gdb_reg_list = ppc476fp_get_gdb_reg_list,
 
-	.read_memory = ppc476fs_read_memory,
-	.write_memory = ppc476fs_write_memory,
+	.read_memory = ppc476fp_read_memory,
+	.write_memory = ppc476fp_write_memory,
 
-	.checksum_memory = ppc476fs_checksum_memory,
+	.checksum_memory = ppc476fp_checksum_memory,
 
-	.add_breakpoint = ppc476fs_add_breakpoint,
-	.remove_breakpoint = ppc476fs_remove_breakpoint,
-	.add_watchpoint = ppc476fs_add_watchpoint,
-	.remove_watchpoint = ppc476fs_remove_watchpoint,
+	.add_breakpoint = ppc476fp_add_breakpoint,
+	.remove_breakpoint = ppc476fp_remove_breakpoint,
+	.add_watchpoint = ppc476fp_add_watchpoint,
+	.remove_watchpoint = ppc476fp_remove_watchpoint,
 
-	.commands = ppc476fs_command_handlers,
-	.target_create = ppc476fs_target_create,
-	.init_target = ppc476fs_init_target,
-	.examine = ppc476fs_examine,
+	.commands = ppc476fp_command_handlers,
+	.target_create = ppc476fp_target_create,
+	.init_target = ppc476fp_init_target,
+	.examine = ppc476fp_examine,
 
-	.virt2phys = ppc476fs_virt2phys,
-	.read_phys_memory = ppc476fs_read_phys_memory,
-	.write_phys_memory = ppc476fs_write_phys_memory,
-	.mmu = ppc476fs_mmu
+	.virt2phys = ppc476fp_virt2phys,
+	.read_phys_memory = ppc476fp_read_phys_memory,
+	.write_phys_memory = ppc476fp_write_phys_memory,
+	.mmu = ppc476fp_mmu
 };
