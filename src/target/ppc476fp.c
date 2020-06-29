@@ -232,7 +232,7 @@ static const struct reg_arch_type ppc476fp_fpu_reg_type = {
 };
 
 static const uint32_t coreid_mask[4] = {
-	0x5, 0x6
+	0x4, 0x5, 0x6, 0x3
 };
 
 static inline uint32_t get_bits_32(uint32_t value, unsigned pos, unsigned len)
@@ -3012,8 +3012,8 @@ static int ppc476fp_target_create(struct target *target, Jim_Interp *interp)
 
 	LOG_DEBUG("coreid=%i", target->coreid);
 
-	if ((target->coreid < 0) || (target->coreid > 1)) {
-		LOG_ERROR("coreid=%i is not allowed. It must be 0 or 1. It has been set to 0.", target->coreid);
+	if ((target->coreid < 0) || (target->coreid > 3)) {
+		LOG_ERROR("coreid=%i is not allowed. It must be from 0 to 3. It has been set to 0.", target->coreid);
 		target->coreid = 0;
 	}
 
