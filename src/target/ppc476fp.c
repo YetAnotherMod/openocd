@@ -450,8 +450,8 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value)
 	if (ret != ERROR_OK)
 		return ret;
 
-	memcpy(((uint32_t*)value + 0), &value_1, 4);
-	memcpy(((uint32_t*)value + 1), &value_2, 4);
+	memcpy(((uint32_t*)value + 0), &value_2, 4);
+	memcpy(((uint32_t*)value + 1), &value_1, 4);
 
 	return ERROR_OK;
 }
@@ -459,8 +459,8 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value)
 // the function uses R2 register and does not restore one
 static int write_fpr_reg(struct target *target, int reg_num, uint64_t value)
 {
-	uint32_t value_1 = (uint32_t)(value >> 0);
-	uint32_t value_2 = (uint32_t)(value >> 32);
+	uint32_t value_1 = (uint32_t)(value >> 32);
+	uint32_t value_2 = (uint32_t)(value >> 0);
 	uint32_t code;
 	int ret;
 
