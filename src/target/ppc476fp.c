@@ -310,7 +310,7 @@ static void add_jtag_read_write_register(struct target *target, uint32_t instr_w
 	}
 }
 
-static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
+static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint8_t *read_data)
 {
 	uint8_t data_in_buffer[8];
 	int ret;
@@ -322,12 +322,15 @@ static int jtag_read_write_register(struct target *target, uint32_t instr_withou
 		return ret;
 
 	if (read_data != NULL)
-		*read_data = buf_get_u32(data_in_buffer, 0, 32);
+	{
+		uint32_t tmp = buf_get_u32(data_in_buffer, 0, 32);
+		memcpy(read_data,&tmp,sizeof(tmp));
+	}
 
 	return ERROR_OK;
 }
 
-static int read_JDSR(struct target *target, uint32_t *data)
+static int read_JDSR(struct target *target, uint8_t *data)
 {
 	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 0, 0, data);
 }
@@ -354,12 +357,12 @@ static int stuff_code(struct target *target, uint32_t code)
 	return ERROR_OK;
 }
 
-static int read_DBDR(struct target *target, uint32_t *data)
+static int read_DBDR(struct target *target, uint8_t *data)
 {
 	return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 0, 0, data);
 }
 
-static int read_gpr_reg(struct target *target, int reg_num, uint32_t *data)
+static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data)
 {
 	uint32_t code = 0x7C13FBA6 | (reg_num << 21); // mtdbdr Rx
 	int ret = stuff_code(target, code);
@@ -392,7 +395,7 @@ static int write_gpr_reg(struct target *target, int reg_num, uint32_t data)
 }
 
 // the function uses R2 register and does not restore one
-static int read_spr_reg(struct target *target, int spr_num, uint32_t *data)
+static int read_spr_reg(struct target *target, int spr_num, uint8_t *data)
 {
 	uint32_t code = 0x7C4002A6 | ((spr_num & 0x1F) << 16) | ((spr_num & 0x3E0) << (11 - 5)); // mfspr R2, spr
 	int ret = stuff_code(target, code);
@@ -440,13 +443,13 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value)
 	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret  = read_gpr_reg(target, 2, &value_1);
+	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_1);
 	if (ret != ERROR_OK)
 		return ret;
 	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret  = read_gpr_reg(target, 2, &value_2);
+	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -505,7 +508,7 @@ static int clear_DBSR(struct target *target)
 }
 
 // the function uses R2 register and does not restore one
-static int read_MSR(struct target *target, uint32_t *value)
+static int read_MSR(struct target *target, uint8_t *value)
 {
 	int ret;
 
@@ -563,13 +566,13 @@ static int test_memory_at_stack_internal(struct target *target)
 	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret  = read_gpr_reg(target, 2, &value_1);
+	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_1);
 	if (ret != ERROR_OK)
 		return ret;
 	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret  = read_gpr_reg(target, 2, &value_2);
+	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -677,7 +680,7 @@ static int read_required_gen_regs(struct target *target)
 		ret = stuff_code(target, 0x48000001); // bl $+0
 		if (ret != ERROR_OK)
 			return ret;
-		ret = read_spr_reg(target, SPR_REG_NUM_LR, &value);
+		ret = read_spr_reg(target, SPR_REG_NUM_LR, (uint8_t*)&value);
 		set_reg_value_32(ppc476fp->PC_reg, value - 4);
 		if (ret != ERROR_OK)
 			return ret;
@@ -1169,7 +1172,7 @@ static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
 	uint32_t iac_mask;
 	int ret;
 
-	assert(bp->set != 0);
+	assert(bp->is_set != 0);
 
 	while (true) {
 		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
@@ -1186,7 +1189,7 @@ static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
 	if (ret != ERROR_OK)
 		return ret;
 
-	bp->set = 0;
+	bp->is_set = 0;
 
 	return ERROR_OK;
 }
@@ -1198,7 +1201,7 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp)
 	uint32_t test_value;
 	int ret;
 
-	assert(bp->set != 0);
+	assert(bp->is_set != 0);
 
 	memcpy(&instr_saved, bp->orig_instr, 4);
 
@@ -1216,12 +1219,12 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp)
 	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 2, &test_value);
+	ret = read_gpr_reg(target, 2, (uint8_t*)&test_value);
 	if (ret != ERROR_OK)
 		return ret;
 
 	if (test_value == instr_saved)
-		bp->set = 0;
+		bp->is_set = 0;
 	else
 		LOG_WARNING("soft breakpoint cannot be removed at address 0x%08X", (uint32_t)bp->address);
 
@@ -1264,7 +1267,7 @@ static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 	uint32_t iac_mask;
 	int ret;
 
-	assert(bp->set == 0);
+	assert(bp->is_set == 0);
 
 	while (true) {
 		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
@@ -1283,7 +1286,7 @@ static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 	if (ret != ERROR_OK)
 		return ret;
 
-	bp->set = 1;
+	bp->is_set = 1;
 
 	return ERROR_OK;
 }
@@ -1301,7 +1304,7 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp)
 	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 2, &instr_saved);
+	ret = read_gpr_reg(target, 2, (uint8_t*)&instr_saved);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1318,12 +1321,12 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp)
 	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 2, &test_value);
+	ret = read_gpr_reg(target, 2, (uint8_t*)&test_value);
 	if (ret != ERROR_OK)
 		return ret;
 
 	if (test_value == TRAP_INSTRUCTION_CODE)
-		bp->set = 1;
+		bp->is_set = 1;
 	else
 		LOG_WARNING("soft breakpoint cannot be set at address 0x%08X", (uint32_t)bp->address);
 
@@ -1339,7 +1342,7 @@ static int enable_breakpoints(struct target *target)
 	int ret;
 
 	while (bp != NULL) {
-		if (bp->set == 0) {
+		if (bp->is_set == 0) {
 			if (bp->type == BKPT_HARD) {
 				R2_used = true;
 				ret = set_hw_breakpoint(target, bp);
@@ -1381,7 +1384,7 @@ static void invalidate_hw_breakpoints(struct target *target)
 
 	while (bp != NULL) {
 		if (bp->type == BKPT_HARD)
-			bp->set = 0;
+			bp->is_set = 0;
 		bp = bp->next;
 	}
 }
@@ -1414,7 +1417,7 @@ static int unset_watchpoint(struct target *target, struct watchpoint *wp)
 	uint32_t dacw_mask;
 	int ret;
 
-	assert(wp->set != 0);
+	assert(wp->is_set != 0);
 
 	while (true) {
 		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
@@ -1437,7 +1440,7 @@ static int unset_watchpoint(struct target *target, struct watchpoint *wp)
 	if (ret != ERROR_OK)
 		return ret;
 
-	wp->set = 0;
+	wp->is_set = 0;
 
 	return ERROR_OK;
 }
@@ -1452,7 +1455,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 	uint32_t dacw_mask;
 	uint32_t dac_mask;
 
-	assert(wp->set == 0);
+	assert(wp->is_set == 0);
 
 	while (true) {
 		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
@@ -1487,7 +1490,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 	if (ret != ERROR_OK)
 		return ret;
 
-	wp->set = 1;
+	wp->is_set = 1;
 
 	return ERROR_OK;
 }
@@ -1500,7 +1503,7 @@ static int enable_watchpoints(struct target *target)
 	int ret;
 
 	while (wp != NULL) {
-		if (wp->set == 0) {
+		if (wp->is_set == 0) {
 			R2_used = true;
 			ret = set_watchpoint(target, wp);
 			if (ret != ERROR_OK)
@@ -1527,7 +1530,7 @@ static void invalidate_watchpoints(struct target *target)
 	assert((ppc476fp->DBCR0_value & DBCR0_DACX_MASK) == 0);
 
 	while (wp != NULL) {
-		wp->set = 0;
+		wp->is_set = 0;
 		wp = wp->next;
 	}
 }
@@ -1668,7 +1671,7 @@ static int reset_and_halt(struct target *target)
 		if (ret != ERROR_OK)
 			return ret;
 
-		ret = read_JDSR(target, &value_JDSR);
+		ret = read_JDSR(target, (uint8_t*)&value_JDSR);
 		if (ret != ERROR_OK)
 			return ret;
 
@@ -1695,7 +1698,7 @@ static int examine_internal(struct target *target)
 
 	tap_ext->last_coreid = -1;
 
-	ret = read_JDSR(target, &JDSR_value);
+	ret = read_JDSR(target, (uint8_t*)&JDSR_value);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1761,7 +1764,7 @@ static int read_virt_mem(struct target *target, uint32_t address, uint32_t size,
 	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 2, &value);
+	ret = read_gpr_reg(target, 2, (uint8_t*)&value);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1842,7 +1845,7 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 	ret = stuff_code(target, 0x7C220764); // tlbre R1, R2, 0
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 1, &hw->data[0]);
+	ret = read_gpr_reg(target, 1, (uint8_t*)&hw->data[0]);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1853,18 +1856,18 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 	ret = stuff_code(target, 0x7C220F64); // tlbre R1, R2, 1
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 1, &hw->data[1]);
+	ret = read_gpr_reg(target, 1, (uint8_t*)&hw->data[1]);
 	if (ret != ERROR_OK)
 		return ret;
 
 	ret = stuff_code(target, 0x7C221764); // tlbre R1, R2, 2
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 1, &hw->data[2]);
+	ret = read_gpr_reg(target, 1, (uint8_t*)&hw->data[2]);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &mmucr_value);
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&mmucr_value);
 	if (ret != ERROR_OK)
 		return ret;
 	hw->tid = mmucr_value & MMUCR_STID_MASK;
@@ -2034,19 +2037,19 @@ static int init_phys_mem(struct target *target, struct phys_mem_state *state)
 {
 	int ret;
 
-	ret = read_MSR(target, &state->saved_MSR);
+	ret = read_MSR(target, (uint8_t*)&state->saved_MSR);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &state->saved_MMUCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&state->saved_MMUCR);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = read_spr_reg(target, SPR_REG_NUM_PID, &state->saved_PID);
+	ret = read_spr_reg(target, SPR_REG_NUM_PID, (uint8_t*)&state->saved_PID);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = read_spr_reg(target, SPR_REG_NUM_USPCR, &state->saved_USPCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_USPCR, (uint8_t*)&state->saved_USPCR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2294,7 +2297,7 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 	int ret;
 
 	// save MMUCR
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&saved_MMUCR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2306,10 +2309,10 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 			return ret;
 	}
 
-	ret = read_spr_reg(target, SPR_REG_NUM_SSPCR, &value_SSPCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_SSPCR, (uint8_t*)&value_SSPCR);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_spr_reg(target, SPR_REG_NUM_USPCR, &value_USPCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_USPCR, (uint8_t*)&value_USPCR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2359,7 +2362,7 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	int ret;
 
 	// save MMUCR
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&saved_MMUCR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2486,7 +2489,7 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd, stru
 	int ret;
 
 	// save MMUCR
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&saved_MMUCR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2555,7 +2558,7 @@ static int handle_tlb_drop_all_command_internal(struct target *target)
 	int i;
 	int ret;
 
-	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, &saved_MMUCR);
+	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&saved_MMUCR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2602,7 +2605,7 @@ static int ppc476fp_poll(struct target *target)
 
 	// LOG_DEBUG("coreid=%i, cores %i %i", target->coreid, target->gdb_service->core[0], target->gdb_service->core[1]);
 
-	ret = read_JDSR(target, &JDSR_value);
+	ret = read_JDSR(target, (uint8_t*)&JDSR_value);
 	if (ret != ERROR_OK) {
 		target->state = TARGET_UNKNOWN;
 		return ret;
@@ -2618,7 +2621,7 @@ static int ppc476fp_poll(struct target *target)
 		if (ret != ERROR_OK)
 			return ret;
 
-		ret = read_spr_reg(target, SPR_REG_NUM_DBSR, &DBSR_value);
+		ret = read_spr_reg(target, SPR_REG_NUM_DBSR, (uint8_t*)&DBSR_value);
 		if (ret != ERROR_OK)
 			return ret;
 
@@ -2909,7 +2912,7 @@ static int ppc476fp_add_breakpoint(struct target *target, struct breakpoint *bre
 	if ((breakpoint->address & 0x3) != 0)
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
-	breakpoint->set = 0;
+	breakpoint->is_set = 0;
 	memset(breakpoint->orig_instr, 0, 4);
 
 	if (breakpoint->type == BKPT_HARD) {
@@ -2931,7 +2934,7 @@ static int ppc476fp_remove_breakpoint(struct target *target, struct breakpoint *
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
-	if (breakpoint->set == 0)
+	if (breakpoint->is_set == 0)
 		return ERROR_OK;
 
 	if (breakpoint->type == BKPT_HARD) {
@@ -2964,7 +2967,7 @@ static int ppc476fp_add_watchpoint(struct target *target, struct watchpoint *wat
 	LOG_DEBUG("coreid=%i, address=0x%08lX, rw=%i, length=%u, value=0x%08X, mask=0x%08X",
 		target->coreid, watchpoint->address, watchpoint->rw, watchpoint->length, watchpoint->value, watchpoint->mask);
 
-	watchpoint->set = 0;
+	watchpoint->is_set = 0;
 
 	if ((watchpoint->length != 1) && (watchpoint->length != 2) && (watchpoint->length != 4))
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -2995,7 +2998,7 @@ static int ppc476fp_remove_watchpoint(struct target *target, struct watchpoint *
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
-	if (watchpoint->set == 0)
+	if (watchpoint->is_set == 0)
 		return ERROR_OK;
 
 	ret = unset_watchpoint(target, watchpoint);
@@ -3293,7 +3296,7 @@ COMMAND_HANDLER(ppc476fp_handle_status_command)
 	if (CMD_ARGC != 0)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	ret = read_JDSR(target, &JDSR_value);
+	ret = read_JDSR(target, (uint8_t*)&JDSR_value);
 	if (ret != ERROR_OK) {
 		command_print(CMD, "cannot read JDSR register");
 		return ret;
@@ -3314,7 +3317,7 @@ COMMAND_HANDLER(ppc476fp_handle_jtag_speed_command)
 	int ret;
 
 	while (timeval_ms() - start_time < 1000) {
-		ret = read_DBDR(target, &dummy_data);
+		ret = read_DBDR(target, (uint8_t*)&dummy_data);
 		if (ret != ERROR_OK) {
 			command_print(CMD, "JTAG communication error");
 			return ret;
