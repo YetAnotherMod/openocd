@@ -48,6 +48,8 @@
 #define SPR_REG_NUM_SSPCR 830
 #define SPR_REG_NUM_USPCR 831
 #define SPR_REG_NUM_MMUCR 946
+#define SPR_REG_NUM_MMUBE0 820
+#define SPR_REG_NUM_MMUBE1 821
 
 #define DBCR0_EDM_MASK BIT(63 - 32)
 #define DBCR0_TRAP_MASK BIT(63 - 39)
@@ -144,12 +146,14 @@
 #define TLB_PARAMS_MASK_EN BIT(11)
 #define TLB_PARAMS_MASK_UXWR BIT(12)
 #define TLB_PARAMS_MASK_SXWR BIT(13)
+#define TLB_PARAMS_MASK_BLTD BIT(14)
 
 #define TRAP_INSTRUCTION_CODE 0x7FE00008
 
 struct tlb_hw_record {
 	uint32_t data[3]; // if the 'valid' bit is zero, all other data are undefined
 	uint32_t tid; // if the 'valid' bit is zero, the field is undefined
+	uint32_t bltd; // 6 for none bolted, 7 for auto
 };
 
 struct tlb_cached_record {
@@ -179,6 +183,7 @@ struct tlb_command_params
 	uint32_t en; // 0-BE, 1-LE
 	uint32_t uxwr;
 	uint32_t sxwr;
+	uint32_t bltd; // 6 for 'no', 7 for 'auto'
 };
 
 struct ppc476fp_common {
@@ -257,11 +262,13 @@ static inline struct ppc476fp_tap_ext *target_to_ppc476fp_tap_ext(struct target 
 }
 
 static inline uint32_t get_reg_value_32(struct reg *reg) {
-	return *((uint32_t*)reg->value);
+	uint32_t result;
+	memcpy(&result,reg->value,4);
+	return result;
 }
 
 static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
-	*((uint32_t*)reg->value) = value;
+	memcpy(reg->value,&value,4);
 }
 
 // the function only add the request into the JTAG queue, the jtag_execute_queue function is not called
@@ -1882,7 +1889,6 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 // the function does not call 'isync'
 static int write_tlb(struct target *target, int index_way, struct tlb_hw_record *hw)
 {
-	int way;
 	uint32_t tid;
 	uint32_t data0;
 	uint32_t r2_value;
@@ -1903,8 +1909,12 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	if (ret != ERROR_OK)
 		return ret;
 
-	way = index_way & 0x3;
-	r2_value = (way << 29) | 0x80000000; // the way is set manually
+	if ((hw->bltd < 6)&&(data0 & TLB_0_V_MASK)){
+		r2_value = 0x8000000 | (hw->bltd << 24);
+	}
+	else{
+		r2_value = ((index_way & 0x3) << 29) | 0x80000000; // the way is set manually
+	}
 	ret = write_gpr_reg(target, 2, r2_value);
 	if (ret != ERROR_OK)
 		return ret;
@@ -2213,6 +2223,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[], struct tl
 	memset(params, 0, sizeof *params);
 	params->dsiz = DSIZ_4K;
 	params->way = -1;
+	params->bltd = 6;
 
 	for (arg_index = 0; arg_index < argc; ++arg_index) {
 		arg = argv[arg_index];
@@ -2274,6 +2285,22 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[], struct tl
 				} else
 					ret = parse_uint32_params(TLB_PARAMS_MASK_WAY, 0x3, p, &params->mask, (uint32_t*)&params->way);
 			}
+		}
+		else if (strcmp(cmd, "bltd") == 0) {
+			if ((params->mask & TLB_PARAMS_MASK_BLTD) != 0)
+				ret = ERROR_COMMAND_ARGUMENT_INVALID;
+			else {
+				if (strcmp(p, "no") == 0) {
+					params->mask |= TLB_PARAMS_MASK_BLTD;
+					ret = ERROR_OK;
+				} else if (strcmp(p, "auto") == 0){
+					params->mask |= TLB_PARAMS_MASK_BLTD;
+					ret = ERROR_OK;
+					params->bltd = 7;
+				} else
+					ret = parse_uint32_params(TLB_PARAMS_MASK_BLTD, 5, p, &params->mask, &params->bltd);
+			}
+			
 		}
 		else
 			ret = ERROR_COMMAND_ARGUMENT_INVALID;
@@ -2360,6 +2387,7 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	int way;
 	int index_way;
 	int ret;
+	uint32_t bltd;
 
 	// save MMUCR
 	ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t*)&saved_MMUCR);
@@ -2393,22 +2421,59 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 		assert(false);
 	}
 
-	way = params->way;
-	if (way == -1) {
-		for (way = 0; way < 4; ++way) {
-			index_way = (index << 2) | way;
-			ret = load_uncached_tlb(target, index_way);
-			if (ret != ERROR_OK)
-				return ret;
-			if ((ppc476fp->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
-				break;
+	bltd = params->bltd;
+
+	if (bltd != 6){
+		uint32_t mmube0;
+		uint32_t mmube1;
+		ret = read_spr_reg(target, SPR_REG_NUM_MMUBE0, (uint8_t*)&mmube0);
+		if (ret != ERROR_OK)
+			return ret;
+		ret = read_spr_reg(target, SPR_REG_NUM_MMUBE1, (uint8_t*)&mmube1);
+		if (ret != ERROR_OK)
+			return ret;
+		way = 0;
+
+		if (bltd == 7){
+			if( (mmube0&4) == 0 ){
+				bltd = 0;
+			}else if( (mmube0&2) == 0 ){
+				bltd = 1;
+			}else if( (mmube0&1) == 0 ){
+				bltd = 2;
+			}else if( (mmube1&4) == 0 ){
+				bltd = 3;
+			}else if( (mmube1&2) == 0 ){
+				bltd = 4;
+			}else if( (mmube1&1) == 0 ){
+				bltd = 5;
+			}else{
+				LOG_ERROR("there is no free bltd for the UTLB record");
+				return ERROR_FAIL;
+			}
 		}
-		if (way > 3) {
-			LOG_ERROR("there is no free way for the UTLB record");
+		if ( ((bltd < 3) && (mmube0&(1<<(2-bltd)))) || ((bltd >= 3) && (mmube1&(1<<(5-bltd))) ) ) {
+			LOG_ERROR("the defined bltd is not free");
 			return ERROR_FAIL;
 		}
+	}else{
+		way = params->way;
+		if (way == -1) {
+			for (way = 1; way <= 4; ++way) {
+				index_way = (index << 2) | (way%4);
+				ret = load_uncached_tlb(target, index_way);
+				if (ret != ERROR_OK)
+					return ret;
+				if ((ppc476fp->tlb_cache[index_way].hw.data[0] & TLB_0_V_MASK) == 0)
+					break;
+			}
+			if (way > 4) {
+				LOG_ERROR("there is no free way for the UTLB record");
+				return ERROR_FAIL;
+			}
+			way %= 4;
+		}
 	}
-
 	index_way = (index << 2) | way;
 	ret = load_uncached_tlb(target, index_way);
 	if (ret != ERROR_OK)
@@ -2441,6 +2506,7 @@ static int handle_tlb_create_command_internal(struct command_invocation *cmd, st
 	set_bits_32(params->sxwr, TLB_2_SXWR_BIT_POS, TLB_2_SXWR_BIT_LEN, &hw.data[2]);
 
 	hw.tid = params->tid;
+	hw.bltd = bltd;
 
 	ret = write_tlb(target, index_way, &hw);
 	if (ret != ERROR_OK)
@@ -3228,6 +3294,11 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_create_command)
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
+	if((params.mask & TLB_PARAMS_MASK_BLTD) && (params.way > 0)){
+		LOG_ERROR("parameter 'way' is incompatible with 'bltd'");
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
 	ret = handle_tlb_create_command_internal(CMD, target, &params);
 	if (ret != ERROR_OK) {
 		LOG_ERROR("error executing the command %i", ret);
@@ -3254,7 +3325,7 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_drop_command)
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
-	if ((params.mask & ~(TLB_PARAMS_MASK_EPN | TLB_PARAMS_MASK_TID | TLB_PARAMS_MASK_TS)) != 0) {
+	if ((params.mask & ~(TLB_PARAMS_MASK_EPN | TLB_PARAMS_MASK_TID | TLB_PARAMS_MASK_TS | TLB_PARAMS_MASK_BLTD)) != 0) {
 		LOG_ERROR("only parameters 'epn', 'tid' and 'ts' can be defined");
 		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
@@ -3353,7 +3424,7 @@ static const struct command_registration ppc476fp_tlb_exec_command_handlers[] = 
 		.name = "create",
 		.handler = ppc476fp_handle_tlb_create_command,
 		.mode = COMMAND_EXEC,
-		.usage = "epn=<xxx> rpn=<xxx> [erpn=0] [tid=0] [ts=0] [dsiz=4k] [way=auto] [bltd=0] [il1i=0] [il1d=0] [u=0] [wimg=0] [en=BE] [uxwr=0] [sxwr=0]",
+		.usage = "epn=<xxx> rpn=<xxx> [erpn=0] [tid=0] [ts=0] [dsiz=4k] [way=auto] [bltd=no] [il1i=0] [il1d=0] [u=0] [wimg=0] [en=BE] [uxwr=0] [sxwr=0]",
 		.help = "create new UTLB record"
 	},
 	{
