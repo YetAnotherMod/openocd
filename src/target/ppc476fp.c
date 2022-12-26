@@ -22,12 +22,6 @@
 	} while (0)
 */
 
-// jtag instruction codes without core ids
-#define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
-#define JTAG_INSTR_WRITE_JISB_READ_JDSR 0x38 /* 0b0111000 */
-#define JTAG_INSTR_WRITE_READ_DBDR 0x58 /* 0b1011000 */
-#define JTAG_INSTR_CORE_RELOAD 0x78 /* 0b1111000, is used for preventing a JTAG bug with the core swintching */
-
 #define JDSR_PSP_MASK BIT(31 - 31)
 
 #define JDCR_STO_MASK BIT(31 - 0)
@@ -150,6 +144,15 @@
 
 #define TRAP_INSTRUCTION_CODE 0x7FE00008
 
+// jtag instruction codes without core ids
+enum jtag_instr{
+	JTAG_INSTR_WRITE_JDCR_READ_JDSR = 0x28, /* 0b0101000 */
+	JTAG_INSTR_WRITE_JISB_READ_JDSR = 0x38, /* 0b0111000 */
+	JTAG_INSTR_WRITE_READ_DBDR = 0x58, /* 0b1011000 */
+	JTAG_INSTR_CORE_RELOAD = 0x78, /* 0b1111000, is used for preventing a JTAG bug with the core swintching */
+	JTAG_INSTR_UNKNOW = 0
+};
+
 struct tlb_hw_record {
 	uint32_t data[3]; // if the 'valid' bit is zero, all other data are undefined
 	uint32_t tid; // if the 'valid' bit is zero, the field is undefined
@@ -209,6 +212,7 @@ struct ppc476fp_common {
 
 struct ppc476fp_tap_ext {
 	int last_coreid; // -1 if the last core id is unknown
+	enum jtag_instr last_ir;
 };
 
 // used for save/restore/setup pysh memory access
@@ -291,13 +295,17 @@ static void add_jtag_read_write_register(struct target *target, uint32_t instr_w
 		instr_field.in_value = NULL;
 		jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
 		tap_ext->last_coreid = target->coreid;
+		tap_ext->last_ir = JTAG_INSTR_CORE_RELOAD;
 	}
 
 	buf_set_u32(instr_buffer, 0, target->tap->ir_length, instr_without_coreid | coreid_mask[target->coreid]);
 	instr_field.num_bits = target->tap->ir_length;
 	instr_field.out_value = instr_buffer;
 	instr_field.in_value = NULL;
-	jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
+	if(tap_ext->last_ir!=instr_without_coreid){
+		jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
+		tap_ext->last_ir=instr_without_coreid;
+	}
 
 	buf_set_u32(data_out_buffer, 0, 32, write_data);
 	buf_set_u32(data_out_buffer, 32, 1, valid_bit);
@@ -310,7 +318,7 @@ static void add_jtag_read_write_register(struct target *target, uint32_t instr_w
 	// make additional request with valid bit == 0
 	// to correct a JTAG communication BUG
 	if (valid_bit != 0) {
-		jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
+		// jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
 		data_fields[0].out_value = (uint8_t*)zeros;
 		data_fields[0].in_value = NULL;
 		jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
@@ -382,10 +390,19 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data)
 // the function only add the request into the JTAG queue, the jtag_execute_queue function is not called
 static void add_write_gpr_reg(struct target *target, int reg_num, uint32_t data)
 {
-	uint32_t code = 0x7C13FAA6 | (reg_num << 21); // mfdbdr Rx
-
-	add_jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 1, data, NULL);
+	uint32_t code;
+	if (data&0xffff0000){
+		code = 0x3c000000 | (reg_num << 21) | (data >> 16);
 	add_jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
+		if (data & 0xffff){
+			code = 0x60000000 | (reg_num << 21) | (reg_num << 16) | (data & 0xffff);
+			add_jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
+		}
+	}
+	else{
+		code = 0x38000000 | (reg_num << 21) | (data & 0xffff);
+		add_jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
+	}
 }
 
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data)
@@ -1704,6 +1721,7 @@ static int examine_internal(struct target *target)
 	int ret;
 
 	tap_ext->last_coreid = -1;
+	tap_ext->last_ir = JTAG_INSTR_UNKNOW;
 
 	ret = read_JDSR(target, (uint8_t*)&JDSR_value);
 	if (ret != ERROR_OK)
@@ -3098,6 +3116,7 @@ static int ppc476fp_init_target(struct command_context *cmd_ctx, struct target *
 	if (target->tap->priv == NULL) {
 		struct ppc476fp_tap_ext *tap_ext = malloc(sizeof(struct ppc476fp_tap_ext));
 		tap_ext->last_coreid = -1;
+		tap_ext->last_ir = JTAG_INSTR_UNKNOW;
 		target->tap->priv = tap_ext;
 		LOG_DEBUG("The TAP extera struct has been created, coreid=%i", target->coreid);
 	}
