@@ -78,9 +78,6 @@
 #define GPR_REG_COUNT 32
 #define FPR_REG_COUNT 32
 
-#define MAGIC_RANDOM_VALUE_1 0x396F965C
-#define MAGIC_RANDOM_VALUE_2 0x44692D7E
-
 #define PHYS_MEM_MAGIC_PID 0xEFCD
 #define PHYS_MEM_BASE_ADDR 0x00000000
 #define PHYS_MEM_TLB_INDEX (PHYS_MEM_MAGIC_PID & 0xFF) /* if PHYS_MEM_BASE_ADDR == 0x00000000 */
@@ -142,7 +139,9 @@
 #define TLB_PARAMS_MASK_SXWR BIT(13)
 #define TLB_PARAMS_MASK_BLTD BIT(14)
 
-#define TRAP_INSTRUCTION_CODE 0x7FE00008
+
+const int tmp_reg_addr = 30;
+const int tmp_reg_data = 31;
 
 // jtag instruction codes without core ids
 enum jtag_instr{
@@ -261,6 +260,7 @@ static inline struct ppc476fp_tap_ext *target_to_ppc476fp_tap_ext(struct target 
 	return target->tap->priv;
 }
 
+// обращение к кэшированным данным регистров
 static inline uint32_t get_reg_value_32(struct reg *reg) {
 	uint32_t result;
 	memcpy(&result,reg->value,4);
@@ -269,8 +269,11 @@ static inline uint32_t get_reg_value_32(struct reg *reg) {
 
 static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
 	reg->dirty = true;
+	reg->valid = true;
 	memcpy(reg->value,&value,4);
 }
+
+// внутренние функции работы с jtag. все осмысленные действия делаются через вызовы этих функций
 
 // the function only add the request into the JTAG queue, the jtag_execute_queue function is not called
 // read_data can be null
@@ -322,6 +325,8 @@ static void add_jtag_read_write_register(struct target *target, uint32_t instr_w
 	}
 }
 
+// операция SCAN у JTAG всегда двунаправленная. по этой причине, низкоуровневая функция всегда принимает и отправляет данные,
+// выбор направления выполняется при помощи valid_bit (если = 1, значение будет защёлкнуто в регистрах tap-контроллера)
 static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint8_t *read_data)
 {
 	uint8_t data_in_buffer[8];
@@ -342,26 +347,35 @@ static int jtag_read_write_register(struct target *target, uint32_t instr_withou
 	return ERROR_OK;
 }
 
-static int read_JDSR(struct target *target, uint8_t *data)
-{
-	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 0, 0, data);
-}
-
-static int write_JDCR(struct target *target, uint32_t data)
-{
-	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 1, data, NULL);
-}
-
-static int stuff_code(struct target *target, uint32_t code)
-{
-	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
-}
-
+// чтение JTAG-регистра DBDR. Это единственный способ получить ответные данные
 static int read_DBDR(struct target *target, uint8_t *data)
 {
 	return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, 0, 0, data);
 }
 
+// чтение JTAG-регистра JDSR. Общая информация о состоянии ядра
+// выбран режим записи JDCR, но без valid_bit
+static int read_JDSR(struct target *target, uint8_t *data)
+{
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 0, 0, data);
+}
+
+// запись JTAG-регистра JDCR. Регистр доступен только для записи. Используется для
+// правления отладкой (старт/стоп, ss и т.п.)
+static int write_JDCR(struct target *target, uint32_t data)
+{
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR, 1, data, NULL);
+}
+
+// запись JTAG-регистра JISB. Регистр доступен только для записи. Запись в этот регистр
+// напрямую вставляет код инструкции в конвеер и исполняет её.
+static int stuff_code(struct target *target, uint32_t code)
+{
+	return jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR, 1, code, NULL);
+}
+
+// чтение РОН через JTAG. Значение РОН при этом не меняется, но обычно происходит после
+// инструкций, изменяющих значене регистра
 static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data)
 {
 	uint32_t code = 0x7C13FBA6 | (reg_num << 21); // mtdbdr Rx
@@ -372,6 +386,10 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data)
 	return read_DBDR(target, data);
 }
 
+// запись РОН через JTAG. Никак не связано с управляющими командами от GDB,
+// нужно для выполнения отладочных действий (вроде росписи памяти).
+// автоматически помечает регистр как dirty для того, чтобы заменить его значение
+// на эталонное при снятии halt
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data)
 {
 	uint32_t code;
@@ -393,28 +411,260 @@ static int write_gpr_reg(struct target *target, int reg_num, uint32_t data)
 	return jtag_execute_queue();
 }
 
-// the function uses R2 register and does not restore one
-static int read_spr_reg(struct target *target, int spr_num, uint8_t *data)
+// запись значения в область рядом с указателем стека. Внимание! адреса после указателя стека заняты
+// проверяет чистоту r1, при необходимости восстанавливает из эталона
+static int write_at_stack(struct target *target, int16_t shift, uint32_t size, const uint8_t *buffer)
 {
-	uint32_t code = 0x7C4002A6 | ((spr_num & 0x1F) << 16) | ((spr_num & 0x3E0) << (11 - 5)); // mfspr R2, spr
-	int ret = stuff_code(target, code);
+	uint32_t code;
+	uint32_t value;
+	uint32_t i;
+
+	assert(target->state == TARGET_HALTED);
+
+	struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
+	if (ppc476fp->gpr_regs[1]->dirty){
+		write_gpr_reg(target,1,get_reg_value_32(ppc476fp->gpr_regs[1]));
+		ppc476fp->gpr_regs[1]->dirty = false;
+	}
+
+	switch (size)
+	{
+	case 1:
+		code = 0x98010000 | (tmp_reg_data<<21) | ((uint32_t)shift); // stb %tmp_reg_data, 0(%sp)
+		break;
+	case 2:
+		code = 0xB0010000 | (tmp_reg_data<<21) | ((uint32_t)shift); // sth %tmp_reg_data, 0(%sp)
+		break;
+	case 4:
+		code = 0x90010000 | (tmp_reg_data<<21) | ((uint32_t)shift); // stw %tmp_reg_data, 0(%sp)
+		break;
+	default:
+		assert(false);
+	}
+
+	value = 0;
+	for (i = 0; i < size; ++i)
+	{
+		value <<= 8;
+		value |= (uint32_t)*(buffer++);
+	}
+
+	write_gpr_reg(target, tmp_reg_data, value);
+	return stuff_code(target,code);
+}
+
+// чтение значения из области рядом с указателем стека
+// проверяет чистоту r1, при необходимости восстанавливает из эталона
+static int read_at_stack(struct target *target, int16_t shift, uint32_t size, uint8_t *buffer)
+{
+	uint32_t code;
+	uint32_t ishift;
+	uint32_t value;
+	uint32_t i;
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
+	if (ppc476fp->gpr_regs[1]->dirty){
+		write_gpr_reg(target,1,get_reg_value_32(ppc476fp->gpr_regs[1]));
+		ppc476fp->gpr_regs[1]->dirty = false;
+	}
+
+	switch (size)
+	{
+	case 1:
+		code = 0x88010000 | (tmp_reg_data<<21) | ((uint32_t)shift); // lbz %tmp_reg_data, 0(%sp)
+		ishift = 24;
+		break;
+	case 2:
+		code = 0xA0010000 | (tmp_reg_data<<21) | ((uint32_t)shift); // lhz %tmp_reg_data, 0(%sp)
+		ishift = 16;
+		break;
+	case 4:
+		code = 0x80010000 | (tmp_reg_data<<21) | ((uint32_t)shift); // lwz %tmp_reg_data, 0(%sp)
+		ishift = 0;
+		break;
+	default:
+		assert(false);
+	}
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+	ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&value);
 	if (ret != ERROR_OK)
 		return ret;
 
-	target_to_ppc476fp(target)->gpr_regs[2]->dirty=true;
-	return read_gpr_reg(target, 2, data);
+	value <<= ishift;
+	for (i = 0; i < size; ++i)
+	{
+		*(buffer++) = (value >> 24);
+		value <<= 8;
+	}
+
+	return ERROR_OK;
 }
 
-// the function uses R2 register and does not restore one
+// проверка доступности области стека. Происходит по принципу: проверка корректности
+// значения в r1, после чего в свободную часть пытаются записать 8 байт (2 слова),
+// после чего считать и сравнить с эталоном. если чтение удалось, стек считается
+// рабочим
+static int test_memory_at_stack(struct target *target)
+{
+
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+	uint32_t value_1;
+	uint32_t value_2;
+	int ret;
+
+	static const uint32_t MAGIC_RANDOM_VALUE_1 = 0x396F965C;
+	static const uint32_t MAGIC_RANDOM_VALUE_2 = 0x44692D7E;
+
+	uint32_t sp = get_reg_value_32(ppc476fp->gpr_regs[1]);
+
+	if ((sp < 8) || ((sp & 0x3) != 0)) // check the stack pointer
+		return ERROR_MEMORY_AT_STACK;
+
+	ret = write_at_stack(target,-8,4,(const uint8_t*)&MAGIC_RANDOM_VALUE_1);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_at_stack(target,-4,4,(const uint8_t*)&MAGIC_RANDOM_VALUE_2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
+
+	ret = read_at_stack(target,-8,4,(uint8_t*)&value_1);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_at_stack(target,-4,4,(uint8_t*)&value_2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// check the magic values
+	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2))
+		return ERROR_MEMORY_AT_STACK;
+
+	return ERROR_OK;
+}
+
+// Запись значения по эффективному адресу
+static int write_virt_mem(struct target *target, uint32_t address, uint32_t size, const uint8_t *buffer)
+{
+	uint32_t code;
+	uint32_t value;
+	uint32_t i;
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	switch (size)
+	{
+	case 1:
+		code = 0x98000000 | (tmp_reg_data<<21) | (tmp_reg_addr<<16); // stb %tmp_reg_data, 0(%tmp_reg_addr)
+		break;
+	case 2:
+		code = 0xB0000000 | (tmp_reg_data<<21) | (tmp_reg_addr<<16); // sth %tmp_reg_data, 0(%tmp_reg_addr)
+		break;
+	case 4:
+		code = 0x90000000 | (tmp_reg_data<<21) | (tmp_reg_addr<<16); // stw %tmp_reg_data, 0(%tmp_reg_addr)
+		break;
+	default:
+		assert(false);
+	}
+
+	ret = write_gpr_reg(target, tmp_reg_addr, address);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	value = 0;
+	for (i = 0; i < size; ++i)
+	{
+		value <<= 8;
+		value |= (uint32_t)*(buffer++);
+	}
+
+	ret = write_gpr_reg(target, tmp_reg_data, value);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	return stuff_code(target,code);
+}
+
+// Чтение значения с эффективного адреса
+static int read_virt_mem(struct target *target, uint32_t address, uint32_t size, uint8_t *buffer)
+{
+	uint32_t code;
+	uint32_t shift;
+	uint32_t value;
+	uint32_t i;
+	int ret;
+
+	assert(target->state == TARGET_HALTED);
+
+	switch (size)
+	{
+	case 1:
+		code = 0x88000000 | (tmp_reg_data<<21) | (tmp_reg_addr<<16); // lbz %tmp_reg_data, 0(%tmp_reg_addr)
+		shift = 24;
+		break;
+	case 2:
+		code = 0xA0000000 | (tmp_reg_data<<21) | (tmp_reg_addr<<16); // lhz %tmp_reg_data, 0(%tmp_reg_addr)
+		shift = 16;
+		break;
+	case 4:
+		code = 0x80000000 | (tmp_reg_data<<21) | (tmp_reg_addr<<16); // lwz %tmp_reg_data, 0(%tmp_reg_addr)
+		shift = 0;
+		break;
+	default:
+		assert(false);
+	}
+
+	ret = write_gpr_reg(target, tmp_reg_addr, address);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, code);
+	if (ret != ERROR_OK)
+		return ret;
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+	ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&value);
+	if (ret != ERROR_OK)
+		return ret;
+
+	value <<= shift;
+	for (i = 0; i < size; ++i)
+	{
+		*(buffer++) = (value >> 24);
+		value <<= 8;
+	}
+
+	return ERROR_OK;
+}
+
+
+// чтение spr-регистра в data
+static int read_spr_reg(struct target *target, int spr_num, uint8_t *data)
+{
+	uint32_t code = 0x7C0002A6 | (tmp_reg_data << 21) | ((spr_num & 0x1F) << 16) | ((spr_num & 0x3E0) << (11 - 5)); // mfspr tmp_reg_data, spr
+	int ret = stuff_code(target, code);
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty=true;
+	if (ret != ERROR_OK)
+		return ret;
+
+	return read_gpr_reg(target, tmp_reg_data, data);
+}
+
+// запись значения data в spr-регистр
 static int write_spr_reg(struct target *target, int spr_num, uint32_t data)
 {
 	uint32_t code;
-	target_to_ppc476fp(target)->gpr_regs[2]->dirty=true;
-	int ret = write_gpr_reg(target, 2, data);
+	int ret = write_gpr_reg(target, tmp_reg_data, data);
 	if (ret != ERROR_OK)
 		return ret;
 
-	code = 0x7C4003A6 | ((spr_num & 0x1F) << 16) | ((spr_num & 0x3E0) << (11 - 5)); // mtspr spr, R2
+	code = 0x7C0003A6 | (tmp_reg_data << 21) | ((spr_num & 0x1F) << 16) | ((spr_num & 0x3E0) << (11 - 5)); // mtspr spr, tmp_reg_data
 	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
@@ -422,7 +672,9 @@ static int write_spr_reg(struct target *target, int spr_num, uint32_t data)
 	return ERROR_OK;
 }
 
-// the function uses R2 register and does not restore one
+// чтение регистра fpu. Здесь много заковырок. Во-первых, fpu должен быть включен.
+// Во-вторых, регистры fpu нельзя напрямую передать в JTAG или хотябы РОН, потому
+// обращение к ним происходит через стек, потому он тоже должен работать.
 static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -433,61 +685,49 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value)
 
 	assert((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) != 0);
 
-	write_gpr_reg(target,1,get_reg_value_32(ppc476fp->gpr_regs[1]));
-	ppc476fp->gpr_regs[2]->dirty = true;
-
-	code = 0xD801FFF8 | (reg_num << 21); // stfd Fx, -8(r1)
+	code = 0xd801fff8 | (reg_num << 21); // stfd Fx, -8(sp)
 	ret = stuff_code(target, code);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
+	ret = read_at_stack(target,-8,4,(uint8_t*)&value_1);
 	if (ret != ERROR_OK)
 		return ret;
-	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_1);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_2);
+	ret = read_at_stack(target,-4,4,(uint8_t*)&value_2);
 	if (ret != ERROR_OK)
 		return ret;
 
-	memcpy(((uint32_t*)value + 0), &value_2, 4);
-	memcpy(((uint32_t*)value + 1), &value_1, 4);
+	memcpy(((uint32_t*)value + 0), (uint8_t*)&value_2, 4);
+	memcpy(((uint32_t*)value + 1), (uint8_t*)&value_1, 4);
 
 	return ERROR_OK;
 }
 
-// the function uses R2 register and does not restore one
+// запись регистра fpu. Здесь много заковырок. Во-первых, fpu должен быть включен.
+// Во-вторых, регистры fpu нельзя напрямую передать в JTAG или хотябы РОН, потому
+// обращение к ним происходит через стек, потому он тоже должен работать.
 static int write_fpr_reg(struct target *target, int reg_num, uint64_t value)
 {
 	uint32_t value_1 = (uint32_t)(value >> 32);
 	uint32_t value_2 = (uint32_t)(value >> 0);
-	uint32_t code;
 	int ret;
 
-	ret = write_gpr_reg(target, 2, value_1);
+	ret = write_gpr_reg(target, tmp_reg_data, value_1);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x9041FFF8); // stw R2, -8(R1)
+	
+
+	ret = write_at_stack(target,-8,4,(uint8_t*)&value_1);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = write_gpr_reg(target, 2, value_2);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x9041FFFC); // stw R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	code = 0xC801FFF8 | (reg_num << 21); // lfd Fx, -8(R1)
-	ret = stuff_code(target, code);
+	ret = write_at_stack(target,-4,4,(uint8_t*)&value_2);
 	if (ret != ERROR_OK)
 		return ret;
 
 	return ERROR_OK;
 }
 
-// the function uses R2 register and does not restore one
+// запись регистра DBCR0. Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual
+// 8.5.1 с. 235
 static int write_DBCR0(struct target *target, uint32_t data)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -502,98 +742,81 @@ static int write_DBCR0(struct target *target, uint32_t data)
 	return ERROR_OK;
 }
 
+// очистка регистра DBSR. Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual
+// 8.5.4 с. 239
 static int clear_DBSR(struct target *target)
 {
 	return write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
 }
 
-// the function uses R2 register and does not restore one
-static int read_MSR(struct target *target, uint8_t *value)
-{
-	int ret;
-
-	ret = stuff_code(target, 0x7C4000A6); // mfmsr R2
-	target_to_ppc476fp(target)->gpr_regs[2]->dirty = true;
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_gpr_reg(target, 2, value);
-	if (ret != ERROR_OK)
-		return ret;
-
-	return ERROR_OK;
-}
-
-// the function uses R2 register and does not restore one
+// запись MSR.Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual
+// 7.4.1 с. 173
 static int write_MSR(struct target *target, uint32_t value)
 {
 	int ret;
 
-	ret = write_gpr_reg(target, 2, value);
+	ret = write_gpr_reg(target, tmp_reg_data, value);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x7C400124); // mtmsr R2
+	ret = stuff_code(target, 0x7C000124 | (tmp_reg_data<<21)); // mtmsr tmp_reg_data
 	if (ret != ERROR_OK)
 		return ret;
 
 	return ERROR_OK;
 }
 
-// the function uses R2 register and does not restore one
-static int test_memory_at_stack_internal(struct target *target)
+// чтение MSR.Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual
+// 7.4.1 с. 173
+static int read_MSR(struct target *target, uint8_t *value)
 {
-	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-	uint32_t value_1;
-	uint32_t value_2;
 	int ret;
 
-	uint32_t sp = get_reg_value_32(ppc476fp->gpr_regs[1]);
-
-	if ((sp < 8) || ((sp & 0x3) != 0)) // check the stack pointer
-		return ERROR_MEMORY_AT_STACK;
-	
-	write_gpr_reg(target,1,sp);
-
-	// set magic values to memory
-	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_1);
+	ret = stuff_code(target, 0x7C0000A6 | (tmp_reg_data<<21)); // mfmsr tmp_reg_data
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x9041FFF8); // stw R2, -8(R1)
+	ret = read_gpr_reg(target, tmp_reg_data, value);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_2);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x9041FFFC); // stw R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-
-	// read back the magic values
-	ret = stuff_code(target, 0x8041FFF8); // lwz R2, -8(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_1);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x8041FFFC); // lwz R2, -4(R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret  = read_gpr_reg(target, 2, (uint8_t*)&value_2);
-	if (ret != ERROR_OK)
-		return ret;
-
-	// check the magic values
-	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2))
-		return ERROR_MEMORY_AT_STACK;
 
 	return ERROR_OK;
 }
 
-static int test_memory_at_stack(struct target *target)
-{
-
-	return test_memory_at_stack_internal(target);
+static int read_DCR(struct target *target, uint32_t addr, uint32_t *value){
+	int ret;
+	uint32_t code;
+	ret = write_gpr_reg(target, tmp_reg_addr, addr);
+	if (ret != ERROR_OK)
+		return ret;
+	code = 0x7C000206 | (tmp_reg_data<<21) | (tmp_reg_addr<<16);
+	LOG_DEBUG("%x",code);
+	ret = stuff_code(target, code); // mfdcrx tmp_reg_data,tmp_reg_addr
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)value);
+	if (ret != ERROR_OK)
+		return ret;
+	return ERROR_OK;
+}
+static int write_DCR(struct target *target, uint32_t addr, uint32_t value){
+	int ret;
+	ret = write_gpr_reg(target, tmp_reg_addr, addr);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_gpr_reg(target, tmp_reg_data, value);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x7C000306 | (tmp_reg_data<<21) | (tmp_reg_addr<<16)); // mtdcrx tmp_reg_addr,tmp_reg_data
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+	if (ret != ERROR_OK)
+		return ret;
+	return ERROR_OK;
 }
 
+// более высокоуровневая функция чтения регистров из таргета.
+// вычитывает все РОН, LR, CTR, XER, MSR, CR, PC
+// по факту, актуализирует кэш регистров в OpenOCD
 static int read_required_gen_regs(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -619,7 +842,6 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	if (!ppc476fp->LR_reg->valid) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = read_spr_reg(target, SPR_REG_NUM_LR, ppc476fp->LR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
@@ -628,7 +850,6 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	if (!ppc476fp->CTR_reg->valid) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = read_spr_reg(target, SPR_REG_NUM_CTR, ppc476fp->CTR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
@@ -637,8 +858,7 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	if (!ppc476fp->XER_reg->valid) {
-
-		ppc476fp->gpr_regs[2]->dirty = true;		ret = read_spr_reg(target, SPR_REG_NUM_XER, ppc476fp->XER_reg->value);
+		ret = read_spr_reg(target, SPR_REG_NUM_XER, ppc476fp->XER_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
 		ppc476fp->XER_reg->valid = true;
@@ -646,7 +866,6 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	if (!ppc476fp->MSR_reg->valid) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = read_MSR(target, ppc476fp->MSR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
@@ -655,11 +874,11 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	if (!ppc476fp->CR_reg->valid) {
-		ppc476fp->gpr_regs[2]->dirty = true;
-		ret = stuff_code(target, 0x7C400026); // mfcr R2
+		ret = stuff_code(target, 0x7C000026 | (tmp_reg_data<<21)); // mfcr tmp_reg_data
+		ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
 		if (ret != ERROR_OK)
 			return ret;
-		ret = read_gpr_reg(target, 2, ppc476fp->CR_reg->value);
+		ret = read_gpr_reg(target, tmp_reg_data, ppc476fp->CR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
 		ppc476fp->CR_reg->valid = true;
@@ -667,7 +886,6 @@ static int read_required_gen_regs(struct target *target)
 	}
 
 	if (!ppc476fp->PC_reg->valid) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ppc476fp->LR_reg->dirty = true;
 		ret = stuff_code(target, 0x48000001); // bl $+0
 		if (ret != ERROR_OK)
@@ -683,6 +901,8 @@ static int read_required_gen_regs(struct target *target)
 	return ERROR_OK;
 }
 
+// Чтение всех регистров FPU
+// по факту, актуализирует кэш регистров в OpenOCD
 static int read_required_fpu_regs(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -771,6 +991,10 @@ static int read_required_fpu_regs(struct target *target)
 	return ERROR_OK;
 }
 
+// Запись грязных (dirty) регистров из кэша OpenOCD в таргет
+// Записывает все РОН, LR, CTR, XER, MSR, CR, PC
+// Важно: регистры становятся грязными не только при изменении их
+// значения через интерфейс OpenOCD, но и при работе внутренних функций JTAG
 int write_dirty_gen_regs(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -783,7 +1007,6 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fp->PC_reg->dirty) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ppc476fp->LR_reg->dirty = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fp->PC_reg));
 		if (ret != ERROR_OK)
@@ -795,8 +1018,7 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fp->CR_reg->dirty) {
-		ppc476fp->gpr_regs[2]->dirty = true;
-		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fp->CR_reg));
+		ret = write_gpr_reg(target, tmp_reg_data, get_reg_value_32(ppc476fp->CR_reg));
 		if (ret != ERROR_OK)
 			return ret;
 		ret = stuff_code(target, 0x7C4FF120); // mtcr R2
@@ -806,7 +1028,6 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fp->MSR_reg->dirty) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = write_MSR(target, get_reg_value_32(ppc476fp->MSR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -814,7 +1035,6 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fp->XER_reg->dirty) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_XER, get_reg_value_32(ppc476fp->XER_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -822,7 +1042,6 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fp->CTR_reg->dirty) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_CTR, get_reg_value_32(ppc476fp->CTR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -830,7 +1049,6 @@ int write_dirty_gen_regs(struct target *target)
 	}
 
 	if (ppc476fp->LR_reg->dirty) {
-		ppc476fp->gpr_regs[2]->dirty = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_LR, get_reg_value_32(ppc476fp->LR_reg));
 		if (ret != ERROR_OK)
 			return ret;
@@ -850,6 +1068,9 @@ int write_dirty_gen_regs(struct target *target)
 	return ERROR_OK;
 }
 
+// Запись грязных (dirty) регистров FPU из кэша OpenOCD в таргет
+// Важно: регистры становятся грязными не только при изменении их
+// значения через интерфейс OpenOCD, но и при работе внутренних функций JTAG
 int write_dirty_fpu_regs(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -912,6 +1133,8 @@ int write_dirty_fpu_regs(struct target *target)
 	return ERROR_OK;
 }
 
+// Помечает весь кэш регистров как невалидный
+// Используется в процессе сохранения/восстановления контекста и при сбросе
 static void invalidate_regs_status(struct target *target)
 {
 	struct reg_cache *cache = target->reg_cache;
@@ -922,8 +1145,12 @@ static void invalidate_regs_status(struct target *target)
 	}
 }
 
+// Помечает конкретный регистр как невалидный и запрашивает его чтение из таргета
+// Текстовым поиском по коду видно, что функция используется только для чтения невалидных регистров
+// Почему регистр инвалидируется - вопрос
 static int ppc476fp_get_gen_reg(struct reg *reg)
 {
+	LOG_DEBUG("%s",reg->name);
 	struct target *target = reg->arch_info;
 
 	if (target->state != TARGET_HALTED)
@@ -935,6 +1162,10 @@ static int ppc476fp_get_gen_reg(struct reg *reg)
 	return read_required_gen_regs(target);
 }
 
+// Изменение регистра в кэше. По идее, эта функция парная к ppc476fp_get_gen_reg,
+// Но их поведение в общую логику не укладываются, а документация openocd не говорит как эта функция
+// должна себя вести в идеале. В случае, если меняется значение MSR, запись происходит сразу.
+// Если при изменении MSR отключается FPU, предварительно кэш регистров FPU сбрасывается
 static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf)
 {
 	struct target *target = reg->arch_info;
@@ -950,9 +1181,11 @@ static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf)
 	if (reg == ppc476fp->MSR_reg) {
 		MSR_new_value = buf_get_u32(buf, 0, 31);
 		if (((MSR_prev_value ^ MSR_new_value) & MSR_FP_MASK) != 0) {
-			ret = write_dirty_fpu_regs(target);
-			if (ret != ERROR_OK)
-				return ret;
+			if ((MSR_prev_value & MSR_FP_MASK)!=0){
+				ret = write_dirty_fpu_regs(target);
+				if (ret != ERROR_OK)
+					return ret;
+			}
 			// write MSR to the CPU
 			ret = write_MSR(target, MSR_new_value);
 			if (ret != ERROR_OK)
@@ -979,6 +1212,7 @@ static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf)
 	return ERROR_OK;
 }
 
+// чтение FPU регистра с таргета. аналогична ppc476fp_get_gen_reg
 static int ppc476fp_get_fpu_reg(struct reg *reg)
 {
 	struct target *target = reg->arch_info;
@@ -992,6 +1226,7 @@ static int ppc476fp_get_fpu_reg(struct reg *reg)
 	return read_required_fpu_regs(target);
 }
 
+// запись в кэш FPU регистра. аналогична ppc476fp_set_gen_reg
 static int ppc476fp_set_fpu_reg(struct reg *reg, uint8_t *buf)
 {
 	struct target *target = reg->arch_info;
@@ -1010,6 +1245,8 @@ static int ppc476fp_set_fpu_reg(struct reg *reg, uint8_t *buf)
 	return ERROR_OK;
 }
 
+// Заполнение полей структуры reg при её инициализации
+// получает на вход указатель на структуру reg, который возвращает
 static struct reg *fill_reg(
 	struct target *target,
 	int all_index,
@@ -1044,6 +1281,7 @@ static struct reg *fill_reg(
 	return reg;
 }
 
+// Создание всего кэша регистров
 static void build_reg_caches(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1093,91 +1331,7 @@ static void build_reg_caches(struct target *target)
 	target->reg_cache = gen_cache;
 }
 
-// the function uses R2 register and does not restore one
-static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
-{
-	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-	int iac_index = 0;
-	uint32_t iac_mask;
-	int ret;
-
-	assert(bp->is_set != 0);
-
-	while (true) {
-		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
-		if ((ppc476fp->DBCR0_value & iac_mask) != 0)
-		{
-			if (ppc476fp->IAC_value[iac_index] == (uint32_t)bp->address)
-				break;
-		}
-		++iac_index;
-		assert(iac_index < HW_BP_NUMBER);
-	}
-
-	ret = write_DBCR0(target, ppc476fp->DBCR0_value & ~iac_mask);
-	if (ret != ERROR_OK)
-		return ret;
-
-	bp->is_set = 0;
-
-	return ERROR_OK;
-}
-
-// the function uses R1 and R2 registers and does not restore them
-static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp)
-{
-	uint32_t instr_saved;
-	uint32_t test_value;
-	int ret;
-
-	assert(bp->is_set != 0);
-
-	memcpy(&instr_saved, bp->orig_instr, 4);
-
-	ret = write_gpr_reg(target, 1, (uint32_t)bp->address);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = write_gpr_reg(target, 2, instr_saved);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x90410000); // stw %R2, 0(%R1)
-	if (ret != ERROR_OK)
-		return ret;
-
-	// test
-	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_gpr_reg(target, 2, (uint8_t*)&test_value);
-	if (ret != ERROR_OK)
-		return ret;
-
-	if (test_value == instr_saved)
-		bp->is_set = 0;
-	else
-		LOG_WARNING("soft breakpoint cannot be removed at address 0x%08X", (uint32_t)bp->address);
-
-	return ERROR_OK;
-}
-
-static int unset_all_soft_breakpoints(struct target *target)
-{
-	struct breakpoint *bp;
-	int ret;
-
-	bp = target->breakpoints;
-	while (bp != NULL) {
-		if (bp->type == BKPT_SOFT) {
-			ret = unset_soft_breakpoint(target, bp);
-			if (ret != ERROR_OK)
-				return ret;
-		}
-	}
-
-	return ERROR_OK;
-}
-
-// the function uses R2 register and does not restore one
+// установка аппаратной точки останова (предполагается, что она создана ранее)
 static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1209,37 +1363,54 @@ static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
 	return ERROR_OK;
 }
 
-// the function uses R1 and R2 registers and does not restore them
+// Снятие ранее установленной аппаратной точки останова
+static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
+{
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+	int iac_index = 0;
+	uint32_t iac_mask;
+	int ret;
+
+	assert(bp->is_set != 0);
+
+	while (true) {
+		iac_mask = (DBCR0_IAC1_MASK >> iac_index);
+		if ((ppc476fp->DBCR0_value & iac_mask) != 0)
+		{
+			if (ppc476fp->IAC_value[iac_index] == (uint32_t)bp->address)
+				break;
+		}
+		++iac_index;
+		assert(iac_index < HW_BP_NUMBER);
+	}
+
+	ret = write_DBCR0(target, ppc476fp->DBCR0_value & ~iac_mask);
+	if (ret != ERROR_OK)
+		return ret;
+
+	bp->is_set = 0;
+
+	return ERROR_OK;
+}
+
+// установка программной точки останова (предполагается, что она создана ранее)
 static int set_soft_breakpoint(struct target *target, struct breakpoint *bp)
 {
 	int ret;
-	uint32_t instr_saved;
 	uint32_t test_value;
 
-	ret = write_gpr_reg(target, 1, (uint32_t)bp->address);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_gpr_reg(target, 2, (uint8_t*)&instr_saved);
+	static const uint32_t TRAP_INSTRUCTION_CODE = 0x7FE00008;
+
+	ret = read_virt_mem(target,(uint32_t)bp->address,4,(uint8_t*)bp->orig_instr);
 	if (ret != ERROR_OK)
 		return ret;
 
-	memcpy(bp->orig_instr, &instr_saved, 4);
-
-	ret = write_gpr_reg(target, 2, TRAP_INSTRUCTION_CODE);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x90410000); // stw %R2, 0(%R1)
+	ret = write_virt_mem(target,(uint32_t)bp->address,4,(const uint8_t*)&TRAP_INSTRUCTION_CODE);
 	if (ret != ERROR_OK)
 		return ret;
 
 	// test
-	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_gpr_reg(target, 2, (uint8_t*)&test_value);
+	ret = read_virt_mem(target,(uint32_t)bp->address,4,(uint8_t*)&test_value);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1251,6 +1422,50 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp)
 	return ERROR_OK;
 }
 
+// Снятие программной точки останова
+static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp)
+{
+	uint32_t test_value;
+	int ret;
+
+	assert(bp->is_set != 0);
+
+	ret = write_virt_mem(target,(uint32_t)bp->address,4,(const uint8_t*)bp->orig_instr);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// проверка установки 
+	ret = read_virt_mem(target,(uint32_t)bp->address,4,(uint8_t*)&test_value);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if (memcmp(&test_value,bp->orig_instr,4)==0)
+		bp->is_set = 0;
+	else
+		LOG_WARNING("soft breakpoint cannot be removed at address 0x%08X", (uint32_t)bp->address);
+
+	return ERROR_OK;
+}
+
+// Снятие всех программных точек останова
+static int unset_all_soft_breakpoints(struct target *target)
+{
+	struct breakpoint *bp;
+	int ret;
+
+	bp = target->breakpoints;
+	while (bp != NULL) {
+		if (bp->type == BKPT_SOFT) {
+			ret = unset_soft_breakpoint(target, bp);
+			if (ret != ERROR_OK)
+				return ret;
+		}
+	}
+
+	return ERROR_OK;
+}
+
+// установка всех созданных точек останова (программных и аппаратных)
 static int enable_breakpoints(struct target *target)
 {
 	struct breakpoint *bp = target->breakpoints;
@@ -1272,7 +1487,8 @@ static int enable_breakpoints(struct target *target)
 	return ERROR_OK;
 }
 
-// the DAC fields in DBCR0 register must be cleared before the function call
+// Пометка всех аппаратных точек останова как не установленных
+// Вызывается при записи DBCR0 при инициализации отладочного режима
 static void invalidate_hw_breakpoints(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1287,6 +1503,8 @@ static void invalidate_hw_breakpoints(struct target *target)
 	}
 }
 
+// Внутренняя функция добавления аппаратной точки останова. 
+// Проверяет, что аппаратных точек останова добавлено не больше, чем поддерживает ядро
 static int add_hw_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
 	struct breakpoint *bp;
@@ -1307,38 +1525,7 @@ static int add_hw_breakpoint(struct target *target, struct breakpoint *breakpoin
 	return ERROR_OK;
 }
 
-static int unset_watchpoint(struct target *target, struct watchpoint *wp)
-{
-	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-	int dac_index = 0;
-	uint32_t dacr_mask;
-	uint32_t dacw_mask;
-	int ret;
-
-	assert(wp->is_set != 0);
-
-	while (true) {
-		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
-		dacw_mask = (DBCR0_DAC1W_MASK >> (dac_index * 2));
-		if ((ppc476fp->DBCR0_value & (dacr_mask | dacw_mask)) != 0)
-		{
-			if (ppc476fp->DAC_value[dac_index] == (uint32_t)wp->address)
-				break;
-		}
-		++dac_index;
-		assert(dac_index < WP_NUMBER);
-	}
-
-	ret = write_DBCR0(target, ppc476fp->DBCR0_value & ~(dacr_mask | dacw_mask));
-	if (ret != ERROR_OK)
-		return ret;
-
-	wp->is_set = 0;
-
-	return ERROR_OK;
-}
-
-// the function uses R2 register and does not restore one
+// Установка точки останова по совпадению адреса данных (предполагается, что она создана ранее)
 static int set_watchpoint(struct target *target, struct watchpoint *wp)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1388,6 +1575,39 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp)
 	return ERROR_OK;
 }
 
+// Снятие ранее установленной точки останова по совпадению адреса данных
+static int unset_watchpoint(struct target *target, struct watchpoint *wp)
+{
+	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+	int dac_index = 0;
+	uint32_t dacr_mask;
+	uint32_t dacw_mask;
+	int ret;
+
+	assert(wp->is_set != 0);
+
+	while (true) {
+		dacr_mask = (DBCR0_DAC1R_MASK >> (dac_index * 2));
+		dacw_mask = (DBCR0_DAC1W_MASK >> (dac_index * 2));
+		if ((ppc476fp->DBCR0_value & (dacr_mask | dacw_mask)) != 0)
+		{
+			if (ppc476fp->DAC_value[dac_index] == (uint32_t)wp->address)
+				break;
+		}
+		++dac_index;
+		assert(dac_index < WP_NUMBER);
+	}
+
+	ret = write_DBCR0(target, ppc476fp->DBCR0_value & ~(dacr_mask | dacw_mask));
+	if (ret != ERROR_OK)
+		return ret;
+
+	wp->is_set = 0;
+
+	return ERROR_OK;
+}
+
+// установка всех созданных точек останова по совпадению адреса данных
 static int enable_watchpoints(struct target *target)
 {
 	struct watchpoint *wp = target->watchpoints;
@@ -1405,6 +1625,8 @@ static int enable_watchpoints(struct target *target)
 	return ERROR_OK;
 }
 
+// пометка всех точек останова по совпадению адреса как не установленных
+// Вызывается при записи DBCR0 при инициализации отладочного режима
 static void invalidate_watchpoints(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1418,6 +1640,7 @@ static void invalidate_watchpoints(struct target *target)
 	}
 }
 
+// пометка всех кэшированных tlb-строк как не валидных
 static void invalidate_tlb_cache(struct target *target)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1427,6 +1650,8 @@ static void invalidate_tlb_cache(struct target *target)
 		ppc476fp->tlb_cache[i].loaded = false;
 }
 
+// сохранение контекста после установки HALT
+// процессор обязан быть в состоянии HALT
 static int save_state(struct target *target)
 {
 	int ret;
@@ -1445,6 +1670,8 @@ static int save_state(struct target *target)
 	return ERROR_OK;
 }
 
+// восстановление контекста перед снятием HALT
+// процессор обязан быть в состоянии HALT
 static int restore_state(struct target *target)
 {
 	int ret = write_dirty_fpu_regs(target);
@@ -1469,6 +1696,7 @@ static int restore_state(struct target *target)
 	return ERROR_OK;
 }
 
+// проверка, что процессор в состоянии HALT, правка PC в кэше (при необходимости) и восстановление контекста
 static int restore_state_before_run(struct target *target, int current, target_addr_t address, enum target_debug_reason  debug_reason)
 {
 	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
@@ -1495,6 +1723,7 @@ static int restore_state_before_run(struct target *target, int current, target_a
 	return ERROR_OK;
 }
 
+// сохранение контекста процессора и установка значений регистров, нужных для работы отладчика
 static int save_state_and_init_debug(struct target *target)
 {
 	int ret;
@@ -1609,100 +1838,11 @@ static int examine_internal(struct target *target)
 }
 
 // the target must be halted
-// the function uses R1, R2 registers and does not restore them
-static int read_virt_mem(struct target *target, uint32_t address, uint32_t size, uint8_t *buffer)
-{
-	uint32_t code;
-	uint32_t shift;
-	uint32_t value;
-	uint32_t i;
-	int ret;
-
-	assert(target->state == TARGET_HALTED);
-
-	switch (size)
-	{
-	case 1:
-		code = 0x88410000; // lbz %R2, 0(%R1)
-		shift = 24;
-		break;
-	case 2:
-		code = 0xA0410000; // lhz %R2, 0(%R1)
-		shift = 16;
-		break;
-	case 4:
-		code = 0x80410000; // lwz %R2, 0(%R1)
-		shift = 0;
-		break;
-	default:
-		assert(false);
-	}
-
-	ret = write_gpr_reg(target, 1, address);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, code);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_gpr_reg(target, 2, (uint8_t*)&value);
-	if (ret != ERROR_OK)
-		return ret;
-
-	value <<= shift;
-	for (i = 0; i < size; ++i)
-	{
-		*(buffer++) = (value >> 24);
-		value <<= 8;
-	}
-
-	return ERROR_OK;
-}
-
-// the target must be halted
-// the function uses R1, R2 registers and does not restore them
-static void write_virt_mem(struct target *target, uint32_t address, uint32_t size, const uint8_t *buffer)
-{
-	uint32_t code;
-	uint32_t value;
-	uint32_t i;
-
-	assert(target->state == TARGET_HALTED);
-
-	switch (size)
-	{
-	case 1:
-		code = 0x98410000; // stb %R2, 0(%R1)
-		break;
-	case 2:
-		code = 0xB0410000; // sth %R2, 0(%R1)
-		break;
-	case 4:
-		code = 0x90410000; // stw %R2, 0(%R1)
-		break;
-	default:
-		assert(false);
-	}
-
-	write_gpr_reg(target, 1, address);
-
-	value = 0;
-	for (i = 0; i < size; ++i)
-	{
-		value <<= 8;
-		value |= (uint32_t)*(buffer++);
-	}
-
-	write_gpr_reg(target, 2, value);
-	stuff_code(target,code);
-}
-
-// the target must be halted
-// the function uses R1, R2, MMUCR registers and does not restore them
 static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *hw)
 {
 	int index;
 	int way;
-	uint32_t r2_value;
+	uint32_t search_ind;
 	uint32_t mmucr_value;
 	int ret;
 
@@ -1716,15 +1856,16 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 	index = index_way >> 2;
 	way = index_way & 0x3;
 
-	r2_value = (index << 16) | (way << 29);
-	ret = write_gpr_reg(target, 2, r2_value);
+	search_ind = (index << 16) | (way << 29);
+	ret = write_gpr_reg(target, tmp_reg_addr, search_ind);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = stuff_code(target, 0x7C220764); // tlbre R1, R2, 0
+	ret = stuff_code(target, 0x7C220764 | (tmp_reg_data << 21 ) | (tmp_reg_addr << 16)); // tlbre tmp_reg_data, tmp_reg_addr, 0
+	target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 1, (uint8_t*)&hw->data[0]);
+	ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&hw->data[0]);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1732,17 +1873,17 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 	if ((hw->data[0] & TLB_0_V_MASK) == 0)
 		return ERROR_OK;
 
-	ret = stuff_code(target, 0x7C220F64); // tlbre R1, R2, 1
+	ret = stuff_code(target, 0x7C220F64 | (tmp_reg_data << 21 ) | (tmp_reg_addr << 16)); // tlbre tmp_reg_data, tmp_reg_addr, 1
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 1, (uint8_t*)&hw->data[1]);
+	ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&hw->data[1]);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = stuff_code(target, 0x7C221764); // tlbre R1, R2, 2
+	ret = stuff_code(target, 0x7C221764 | (tmp_reg_data << 21 ) | (tmp_reg_addr << 16)); // tlbre tmp_reg_data, tmp_reg_addr, 2
 	if (ret != ERROR_OK)
 		return ret;
-	ret = read_gpr_reg(target, 1, (uint8_t*)&hw->data[2]);
+	ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&hw->data[2]);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1756,14 +1897,13 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 
 // the target must be halted
 // the function deletes the UTLB record at the specified index_way if the 'valid' bit is 0
-// the function uses R1, R2, MMUCR registers and does not restore them
 // the function cannot write a bolted UTLB record
 // the function does not call 'isync'
 static int write_tlb(struct target *target, int index_way, struct tlb_hw_record *hw)
 {
 	uint32_t tid;
 	uint32_t data0;
-	uint32_t r2_value;
+	uint32_t indexed_value;
 	int ret;
 
 	assert(target->state == TARGET_HALTED);
@@ -1782,19 +1922,19 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 		return ret;
 
 	if ((hw->bltd < 6)&&(data0 & TLB_0_V_MASK)){
-		r2_value = 0x8000000 | (hw->bltd << 24);
+		indexed_value = 0x8000000 | (hw->bltd << 24);
 	}
 	else{
-		r2_value = ((index_way & 0x3) << 29) | 0x80000000; // the way is set manually
+		indexed_value = ((index_way & 0x3) << 29) | 0x80000000; // the way is set manually
 	}
-	ret = write_gpr_reg(target, 2, r2_value);
+	ret = write_gpr_reg(target, tmp_reg_data, indexed_value);
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = write_gpr_reg(target, 1, data0);
+	ret = write_gpr_reg(target, tmp_reg_addr, data0);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x7C2207A4); // tlbwe R1, R2, 0
+	ret = stuff_code(target, 0x7c0007a4 | (tmp_reg_addr << 21 ) | (tmp_reg_data << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 0
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1802,17 +1942,17 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	if ((data0 & TLB_0_V_MASK) == 0)
 		return ERROR_OK;
 
-	ret = write_gpr_reg(target, 1, hw->data[1]);
+	ret = write_gpr_reg(target, tmp_reg_addr, hw->data[1]);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x7C220FA4); // tlbwe R1, R2, 1
+	ret = stuff_code(target, 0x7c000fa4 | (tmp_reg_addr << 21 ) | (tmp_reg_data << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 1
 	if (ret != ERROR_OK)
 		return ret;
 
 	ret = write_gpr_reg(target, 1, hw->data[2]);
 	if (ret != ERROR_OK)
 		return ret;
-	ret = stuff_code(target, 0x7C2217A4); // tlbwe R1, R2, 2
+	ret = stuff_code(target, 0x7c0017a4 | (tmp_reg_addr << 21 ) | (tmp_reg_data << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 2
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1838,25 +1978,25 @@ static int load_uncached_tlb(struct target *target, int index_way)
 
 static int compare_tlb_record(const void *p1, const void *p2)
 {
-	const struct tlb_sort_record *r1 = p1;
-	const struct tlb_sort_record *r2 = p2;
+	const struct tlb_sort_record *lhv = p1;
+	const struct tlb_sort_record *rhv = p2;
 	uint32_t v1;
 	uint32_t v2;
 
-	if (r1->hw.tid < r2->hw.tid)
+	if (lhv->hw.tid < rhv->hw.tid)
 		return -1;
-	if (r1->hw.tid > r2->hw.tid)
+	if (lhv->hw.tid > rhv->hw.tid)
 		return 1;
 
-	v1 = r1->hw.data[0] & TLB_0_TS_MASK;
-	v2 = r2->hw.data[0] & TLB_0_TS_MASK;
+	v1 = lhv->hw.data[0] & TLB_0_TS_MASK;
+	v2 = rhv->hw.data[0] & TLB_0_TS_MASK;
 	if (v1 < v2)
 		return -1;
 	if (v1 > v2)
 		return 1;
 
-	v1 = get_bits_32(r1->hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN);
-	v2 = get_bits_32(r2->hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN);
+	v1 = get_bits_32(lhv->hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN);
+	v2 = get_bits_32(rhv->hw.data[0], TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN);
 	if (v1 < v2)
 		return -1;
 	if (v1 > v2)
@@ -2724,6 +2864,7 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address, ui
 static int ppc476fp_write_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t count, const uint8_t *buffer)
 {
 	uint32_t i;
+	int ret;
 
 	LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid, address, size, count);
 
@@ -2742,7 +2883,9 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address, u
 
 	for (i = 0; i < count; ++i) {
 		keep_alive();
-		write_virt_mem(target, (uint32_t)address, size, buffer);
+		ret = write_virt_mem(target, (uint32_t)address, size, buffer);
+		if (ret != ERROR_OK)
+			return ret;
 		address += size;
 		buffer += size;
 	}
@@ -3012,7 +3155,9 @@ static int ppc476fp_write_phys_memory(struct target *target, target_addr_t addre
 		}
 
 		keep_alive();
-		write_virt_mem(target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size, buffer);
+		ret = write_virt_mem(target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size, buffer);
+		if (ret != ERROR_OK)
+			return ret;
 		address += size;
 		buffer += size;
 	}
@@ -3190,11 +3335,19 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_read_command)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	
 	uint32_t addr;
+	uint32_t data;
 
 	int ret = parse_u32(CMD_ARGV[0],&addr);
 	if(ret != ERROR_OK){
 		return ret;
 	}
+
+	ret = read_DCR(get_current_target(CMD_CTX),addr,&data);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	command_print(CMD, "DCR %u(0x%x) = %u(0x%x)", addr, addr, data, data);
 
 	return ERROR_OK;
 }
@@ -3213,6 +3366,60 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_write_command)
 		return ret;
 	}
 	ret = parse_u32(CMD_ARGV[1],&data);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	ret = write_DCR(get_current_target(CMD_CTX),addr,data);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_spr_read_command)
+{
+	if (CMD_ARGC != 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	
+	uint32_t addr;
+	uint32_t data;
+
+	int ret = parse_u32(CMD_ARGV[0],&addr);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	ret = read_spr_reg(get_current_target(CMD_CTX),addr,(uint8_t*)&data);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	command_print(CMD, "SPR %u(0x%x) = %u(0x%x)", addr, addr, data, data);
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_spr_write_command)
+{
+	if (CMD_ARGC != 2)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	
+	uint32_t addr;
+	uint32_t data;
+
+	int ret;
+	ret  = parse_u32(CMD_ARGV[0],&addr);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = parse_u32(CMD_ARGV[1],&data);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+
+	ret = write_spr_reg(get_current_target(CMD_CTX),addr,data);
 	if(ret != ERROR_OK){
 		return ret;
 	}
@@ -3274,6 +3481,24 @@ static const struct command_registration ppc476fp_dcr_exec_command_handlers[] = 
 	COMMAND_REGISTRATION_DONE
 };
 
+static const struct command_registration ppc476fp_spr_exec_command_handlers[] = {
+	{
+		.name = "read",
+		.handler = ppc476fp_handle_spr_read_command,
+		.mode = COMMAND_EXEC,
+		.usage = "<num>",
+		.help = "read from SPR <num>"
+	},
+	{
+		.name = "write",
+		.handler = ppc476fp_handle_spr_write_command,
+		.mode = COMMAND_EXEC,
+		.usage = "<num> <data>",
+		.help = "write <data> to SPR <num>"
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
 static const struct command_registration ppc476fp_exec_command_handlers[] = {
 	{
 		.name = "tlb",
@@ -3302,7 +3527,14 @@ static const struct command_registration ppc476fp_exec_command_handlers[] = {
 		.chain = ppc476fp_dcr_exec_command_handlers,
 		.mode = COMMAND_EXEC,
 		.usage = "",
-		.help = "display jtag speed (transaction per second)"
+		.help = "read and write dcr"
+	},
+	{
+		.name = "spr",
+		.chain = ppc476fp_spr_exec_command_handlers,
+		.mode = COMMAND_EXEC,
+		.usage = "",
+		.help = "read and write spr"
 	},
 	COMMAND_REGISTRATION_DONE
 };
