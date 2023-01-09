@@ -393,22 +393,25 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data)
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data)
 {
 	uint32_t code;
-	if (data&0xffff0000){
+	int32_t data_signed = data;
+	int ret = ERROR_OK;
+	if ((data_signed < -32768)||(data_signed>=32768)){
 		code = 0x3c000000 | (reg_num << 21) | (data >> 16);
-		stuff_code(target, code);
+		ret = stuff_code(target, code);
+		if(ret != ERROR_OK){
+			return ret;
+		}
 		if (data & 0xffff){
 			code = 0x60000000 | (reg_num << 21) | (reg_num << 16) | (data & 0xffff);
-			stuff_code(target, code);
+			ret = stuff_code(target, code);
 		}
-	}
-	else{
+	}else{
 		code = 0x38000000 | (reg_num << 21) | (data & 0xffff);
-		stuff_code(target, code);
+		ret = stuff_code(target, code);
 	}
-	struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-	ppc476fp->gpr_regs[reg_num]->dirty = true;
+	target_to_ppc476fp(target)->gpr_regs[reg_num]->dirty = true;
 
-	return jtag_execute_queue();
+	return ret;
 }
 
 // запись значения в область рядом с указателем стека. Внимание! адреса после указателя стека заняты
