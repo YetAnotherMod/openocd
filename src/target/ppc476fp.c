@@ -422,7 +422,11 @@ static int write_at_stack(struct target *target, int16_t shift, uint32_t size, c
 	uint32_t value;
 	uint32_t i;
 
-	assert(target->state == TARGET_HALTED);
+
+	if (target->state != TARGET_HALTED){
+		LOG_ERROR("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
 	if (ppc476fp->gpr_regs[1]->dirty){
@@ -466,7 +470,11 @@ static int read_at_stack(struct target *target, int16_t shift, uint32_t size, ui
 	uint32_t i;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
+
+	if (target->state != TARGET_HALTED){
+		LOG_ERROR("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
 	if (ppc476fp->gpr_regs[1]->dirty){
@@ -560,7 +568,10 @@ static int write_virt_mem(struct target *target, uint32_t address, uint32_t size
 	uint32_t i;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
+	if (target->state != TARGET_HALTED){
+		LOG_ERROR("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	switch (size)
 	{
@@ -605,7 +616,11 @@ static int read_virt_mem(struct target *target, uint32_t address, uint32_t size,
 	uint32_t i;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
+
+	if (target->state != TARGET_HALTED){
+		LOG_ERROR("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	switch (size)
 	{
@@ -1673,6 +1688,45 @@ static int save_state(struct target *target)
 	return ERROR_OK;
 }
 
+
+static int cache_l1_invalidate(struct target *target){
+	//isync; msync; ici; dci 0; isync; msync; dci 2; isync; msync;
+	int ret = stuff_code(target, 0x4c00012c);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x7c0004ac);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x7c00078c);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x7c00038c);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x4c00012c);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x7c0004ac);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x7c40038c);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x4c00012c);
+	if(ret != ERROR_OK){
+		return ret;
+	}
+	ret = stuff_code(target, 0x7c0004ac);
+	return ret;
+}
+
 // восстановление контекста перед снятием HALT
 // процессор обязан быть в состоянии HALT
 static int restore_state(struct target *target)
@@ -1692,6 +1746,11 @@ static int restore_state(struct target *target)
 	ret = enable_watchpoints(target);
 	if (ret != ERROR_OK)
 		return ret;
+
+	ret = cache_l1_invalidate(target);
+	if (ret != ERROR_OK){
+		return ret;
+	}
 
 	invalidate_regs_status(target);
 	invalidate_tlb_cache(target);
@@ -1849,7 +1908,10 @@ static int load_tlb(struct target *target, int index_way, struct tlb_hw_record *
 	uint32_t mmucr_value;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
+	if (target->state != TARGET_HALTED){
+		LOG_ERROR("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	hw->data[0] = 0;
 	hw->data[1] = 0;
@@ -1909,7 +1971,11 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	uint32_t indexed_value;
 	int ret;
 
-	assert(target->state == TARGET_HALTED);
+
+	if (target->state != TARGET_HALTED){
+		LOG_ERROR("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
 	assert((hw->data[0] & TLB_0_BLTD_MASK) == 0);
 
 	// correction for non-valid UTLB record
@@ -1952,7 +2018,7 @@ static int write_tlb(struct target *target, int index_way, struct tlb_hw_record 
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = write_gpr_reg(target, 1, hw->data[2]);
+	ret = write_gpr_reg(target, tmp_reg_addr, hw->data[2]);
 	if (ret != ERROR_OK)
 		return ret;
 	ret = stuff_code(target, 0x7c0017a4 | (tmp_reg_addr << 21 ) | (tmp_reg_data << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 2
