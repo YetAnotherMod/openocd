@@ -50,18 +50,37 @@ static const uint32_t DBCR0_DAC1W_MASK = BIT(63 - 45);
 static const uint32_t DBCR0_DACX_MASK = (0xF << (63 - 47));
 static const uint32_t DBCR0_FT_MASK = BIT(63 - 63);
 
-static const uint32_t DBSR_IAC1_MASK = BIT(63 - 40);
-static const uint32_t DBSR_IAC2_MASK = BIT(63 - 41);
-static const uint32_t DBSR_IAC3_MASK = BIT(63 - 42);
-static const uint32_t DBSR_IAC4_MASK = BIT(63 - 43);
-static const uint32_t DBSR_DAC1R_MASK = BIT(63 - 44);
-static const uint32_t DBSR_DAC1W_MASK = BIT(63 - 45);
-static const uint32_t DBSR_DAC2R_MASK = BIT(63 - 46);
-static const uint32_t DBSR_DAC2W_MASK = BIT(63 - 47);
+#define DBSR_IAC1_MSK BIT(63 - 40)
+#define DBSR_IAC2_MSK BIT(63 - 41)
+#define DBSR_IAC3_MSK BIT(63 - 42)
+#define DBSR_IAC4_MSK BIT(63 - 43)
+#define DBSR_DAC1R_MSK BIT(63 - 44)
+#define DBSR_DAC1W_MSK BIT(63 - 45)
+#define DBSR_DAC2R_MSK BIT(63 - 46)
+#define DBSR_DAC2W_MSK BIT(63 - 47)
+
+static const uint32_t DBSR_IAC1_MASK = DBSR_IAC1_MSK;
+static const uint32_t DBSR_IAC2_MASK = DBSR_IAC2_MSK;
+static const uint32_t DBSR_IAC3_MASK = DBSR_IAC3_MSK;
+static const uint32_t DBSR_IAC4_MASK = DBSR_IAC4_MSK;
+static const uint32_t DBSR_DAC1R_MASK = DBSR_DAC1R_MSK;
+static const uint32_t DBSR_DAC1W_MASK = DBSR_DAC1W_MSK;
+static const uint32_t DBSR_DAC2R_MASK = DBSR_DAC2R_MSK;
+static const uint32_t DBSR_DAC2W_MASK = DBSR_DAC2W_MSK;
+
 static const uint32_t DBSR_IAC_ALL_MASK =
-    (DBSR_IAC1_MASK | DBSR_IAC2_MASK | DBSR_IAC3_MASK | DBSR_IAC4_MASK);
+    (DBSR_IAC1_MSK | DBSR_IAC2_MSK | DBSR_IAC3_MSK | DBSR_IAC4_MSK);
 static const uint32_t DBSR_DAC_ALL_MASK =
-    (DBSR_DAC1R_MASK | DBSR_DAC1W_MASK | DBSR_DAC2R_MASK | DBSR_DAC2W_MASK);
+    (DBSR_DAC1R_MSK | DBSR_DAC1W_MSK | DBSR_DAC2R_MSK | DBSR_DAC2W_MSK);
+
+#undef DBSR_IAC1_MSK
+#undef DBSR_IAC2_MSK
+#undef DBSR_IAC3_MSK
+#undef DBSR_IAC4_MSK
+#undef DBSR_DAC1R_MSK
+#undef DBSR_DAC1W_MSK
+#undef DBSR_DAC2R_MSK
+#undef DBSR_DAC2W_MSK
 
 static const uint32_t MSR_PR_MASK = BIT(63 - 49);
 static const uint32_t MSR_FP_MASK = BIT(63 - 50);
@@ -76,11 +95,10 @@ static const uint32_t MMUCR_STID_MASK = (0xFFFF << 0);
 #define GPR_REG_COUNT 32
 #define FPR_REG_COUNT 32
 
-static const uint32_t PHYS_MEM_MAGIC_PID = 0xEFCD;
-static const uint32_t PHYS_MEM_BASE_ADDR = 0x00000000;
-static const uint32_t PHYS_MEM_TLB_INDEX =
-    (PHYS_MEM_MAGIC_PID & 0xFF); /* if PHYS_MEM_BASE_ADDR == 0x00000000 */
-static const uint32_t PHYS_MEM_TLB_WAY = 2;
+#define PHYS_MEM_MAGIC_PID 0xEFCDu
+#define PHYS_MEM_BASE_ADDR 0x00000000u
+#define PHYS_MEM_TLB_INDEX (PHYS_MEM_MAGIC_PID & 0xFF) /* if PHYS_MEM_BASE_ADDR == 0x00000000 */
+#define PHYS_MEM_TLB_WAY 2
 static const uint32_t PHYS_MEM_TLB_INDEX_WAY =
     ((PHYS_MEM_TLB_INDEX << 2) | PHYS_MEM_TLB_WAY);
 
