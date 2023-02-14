@@ -15,77 +15,83 @@
  * @{
  */
 
-static const uint32_t JDSR_PSP_MASK = BIT(31 - 31);
+enum JDSR_bits{
+    JDSR_FPU_MASK = BIT(31-15),
+    JDSR_APU_MASK = BIT(31-16),
+    JDSR_ISE_MASK = BIT(31-18),
+    JDSR_DTM_MASK = BIT(31-19),
+    JDSR_ITM_MASK = BIT(31-20),
+    JDSR_RMCE_MASK = BIT(31-21),
+    JDSR_DSE_MASK = BIT(31-22),
+    JDSR_AE_MASK = BIT(31-23),
+    JDSR_PE_MASK = BIT(31-24),
+    JDSR_SC_MASK = BIT(31-25),
+    JDSR_RFI_MASK = BIT(31-26),
+    JDSR_RCFI_MASK = BIT(31-27),
+    JDSR_IMC_MASK = BIT(31-28),
+    JDSR_PSP_MASK = BIT(31 - 31),
+};
 
-static const uint32_t JDCR_STO_MASK = BIT(31 - 0);
-static const uint32_t JDCR_SS_MASK = BIT(31 - 2);
-static const uint32_t JDCR_RESET_MASK = (3 << (31 - 4)); /* reset bits */
-static const uint32_t JDCR_RESET_CORE = (1 << (31 - 4)); /* core reset */
-static const uint32_t JDCR_RESET_CHIP = (2 << (31 - 4)); /* chip reset */
-static const uint32_t JDCR_RESET_SYS = (3 << (31 - 4));  /* system reset */
-static const uint32_t JDCR_RSDBSR_MASK = BIT(31 - 8);
+enum JDCR_bits{
+    JDCR_STO_MASK = BIT(31 - 0),
+    JDCR_SS_MASK = BIT(31 - 2),
+    JDCR_RESET_MASK = (3 << (31 - 4)), /* reset bits */
+    JDCR_RESET_CORE = (1 << (31 - 4)), /* core reset */
+    JDCR_RESET_CHIP = (2 << (31 - 4)), /* chip reset */
+    JDCR_RESET_SYS = (3 << (31 - 4)),  /* system reset */
+    JDCR_RSDBSR_MASK = BIT(31 - 8),
+};
 
-static const uint32_t SPR_REG_NUM_LR = 8;
-static const uint32_t SPR_REG_NUM_CTR = 9;
-static const uint32_t SPR_REG_NUM_XER = 1;
-static const uint32_t SPR_REG_NUM_PID = 48;
-static const uint32_t SPR_REG_NUM_DBCR0 = 308;
-static const uint32_t SPR_REG_NUM_DBCR1 = 309;
-static const uint32_t SPR_REG_NUM_DBCR2 = 310;
-static const uint32_t SPR_REG_NUM_DBSR = 304;
-static const uint32_t SPR_REG_NUM_IAC_BASE = 312; /* IAC1..IAC4 */
-static const uint32_t SPR_REG_NUM_DAC_BASE = 316; /* DAC1..DAC2 */
-static const uint32_t SPR_REG_NUM_SSPCR = 830;
-static const uint32_t SPR_REG_NUM_USPCR = 831;
-static const uint32_t SPR_REG_NUM_MMUCR = 946;
-static const uint32_t SPR_REG_NUM_MMUBE0 = 820;
-static const uint32_t SPR_REG_NUM_MMUBE1 = 821;
+enum SPR_REG_NUM {
+    SPR_REG_NUM_LR = 8,
+    SPR_REG_NUM_CTR = 9,
+    SPR_REG_NUM_XER = 1,
+    SPR_REG_NUM_PID = 48,
+    SPR_REG_NUM_DBCR0 = 308,
+    SPR_REG_NUM_DBCR1 = 309,
+    SPR_REG_NUM_DBCR2 = 310,
+    SPR_REG_NUM_DBSR = 304,
+    SPR_REG_NUM_IAC_BASE = 312, /* IAC1..IAC4 */
+    SPR_REG_NUM_DAC_BASE = 316, /* DAC1..DAC2 */
+    SPR_REG_NUM_SSPCR = 830,
+    SPR_REG_NUM_USPCR = 831,
+    SPR_REG_NUM_MMUCR = 946,
+    SPR_REG_NUM_MMUBE0 = 820,
+    SPR_REG_NUM_MMUBE1 = 821,
+};
 
-static const uint32_t DBCR0_EDM_MASK = BIT(63 - 32);
-static const uint32_t DBCR0_TRAP_MASK = BIT(63 - 39);
-static const uint32_t DBCR0_IAC1_MASK = BIT(63 - 40);
-static const uint32_t DBCR0_IACX_MASK = (0xF << (63 - 43));
-static const uint32_t DBCR0_DAC1R_MASK = BIT(63 - 44);
-static const uint32_t DBCR0_DAC1W_MASK = BIT(63 - 45);
-static const uint32_t DBCR0_DACX_MASK = (0xF << (63 - 47));
-static const uint32_t DBCR0_FT_MASK = BIT(63 - 63);
+enum DBCR_bits {
+    DBCR0_EDM_MASK = BIT(63 - 32),
+    DBCR0_TRAP_MASK = BIT(63 - 39),
+    DBCR0_IAC1_MASK = BIT(63 - 40),
+    DBCR0_IACX_MASK = (0xF << (63 - 43)),
+    DBCR0_DAC1R_MASK = BIT(63 - 44),
+    DBCR0_DAC1W_MASK = BIT(63 - 45),
+    DBCR0_DACX_MASK = (0xF << (63 - 47)),
+    DBCR0_FT_MASK = BIT(63 - 63),
+};
 
-#define DBSR_IAC1_MSK BIT(63 - 40)
-#define DBSR_IAC2_MSK BIT(63 - 41)
-#define DBSR_IAC3_MSK BIT(63 - 42)
-#define DBSR_IAC4_MSK BIT(63 - 43)
-#define DBSR_DAC1R_MSK BIT(63 - 44)
-#define DBSR_DAC1W_MSK BIT(63 - 45)
-#define DBSR_DAC2R_MSK BIT(63 - 46)
-#define DBSR_DAC2W_MSK BIT(63 - 47)
+enum DBSR_bits{
+    DBSR_IAC1_MASK = BIT(63 - 40),
+    DBSR_IAC2_MASK = BIT(63 - 41),
+    DBSR_IAC3_MASK = BIT(63 - 42),
+    DBSR_IAC4_MASK = BIT(63 - 43),
+    DBSR_DAC1R_MASK = BIT(63 - 44),
+    DBSR_DAC1W_MASK = BIT(63 - 45),
+    DBSR_DAC2R_MASK = BIT(63 - 46),
+    DBSR_DAC2W_MASK = BIT(63 - 47),
 
-static const uint32_t DBSR_IAC1_MASK = DBSR_IAC1_MSK;
-static const uint32_t DBSR_IAC2_MASK = DBSR_IAC2_MSK;
-static const uint32_t DBSR_IAC3_MASK = DBSR_IAC3_MSK;
-static const uint32_t DBSR_IAC4_MASK = DBSR_IAC4_MSK;
-static const uint32_t DBSR_DAC1R_MASK = DBSR_DAC1R_MSK;
-static const uint32_t DBSR_DAC1W_MASK = DBSR_DAC1W_MSK;
-static const uint32_t DBSR_DAC2R_MASK = DBSR_DAC2R_MSK;
-static const uint32_t DBSR_DAC2W_MASK = DBSR_DAC2W_MSK;
+    DBSR_IAC_ALL_MASK =
+    (DBSR_IAC1_MASK | DBSR_IAC2_MASK | DBSR_IAC3_MASK | DBSR_IAC4_MASK),
+    DBSR_DAC_ALL_MASK =
+    (DBSR_DAC1R_MASK | DBSR_DAC1W_MASK | DBSR_DAC2R_MASK | DBSR_DAC2W_MASK),
+};
 
-static const uint32_t DBSR_IAC_ALL_MASK =
-    (DBSR_IAC1_MSK | DBSR_IAC2_MSK | DBSR_IAC3_MSK | DBSR_IAC4_MSK);
-static const uint32_t DBSR_DAC_ALL_MASK =
-    (DBSR_DAC1R_MSK | DBSR_DAC1W_MSK | DBSR_DAC2R_MSK | DBSR_DAC2W_MSK);
-
-#undef DBSR_IAC1_MSK
-#undef DBSR_IAC2_MSK
-#undef DBSR_IAC3_MSK
-#undef DBSR_IAC4_MSK
-#undef DBSR_DAC1R_MSK
-#undef DBSR_DAC1W_MSK
-#undef DBSR_DAC2R_MSK
-#undef DBSR_DAC2W_MSK
-
-static const uint32_t MSR_PR_MASK = BIT(63 - 49);
-static const uint32_t MSR_FP_MASK = BIT(63 - 50);
-static const uint32_t MSR_DS_MASK = BIT(63 - 59);
-
+enum MSR_bits{
+    MSR_PR_MASK = BIT(63 - 49),
+    MSR_FP_MASK = BIT(63 - 50),
+    MSR_DS_MASK = BIT(63 - 59),
+};
 static const uint32_t MMUCR_STID_MASK = (0xFFFF << 0);
 
 #define ALL_REG_COUNT 71
