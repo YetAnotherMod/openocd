@@ -3550,6 +3550,126 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_write_command) {
     return ERROR_OK;
 }
 
+COMMAND_HANDLER(ppc476fp_handle_dcr_or_command) {
+    if (CMD_ARGC != 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    uint32_t read;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret;
+    ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+    ret = parse_u32(CMD_ARGV[1], &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_DCR(target, addr, &read);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_DCR(target, addr, (read|data) );
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_dirty_fpu_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_dirty_gen_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_dcr_xor_command) {
+    if (CMD_ARGC != 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    uint32_t read;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret;
+    ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+    ret = parse_u32(CMD_ARGV[1], &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_DCR(target, addr, &read);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_DCR(target, addr, (read^data) );
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_dirty_fpu_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_dirty_gen_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_dcr_and_command) {
+    if (CMD_ARGC != 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    uint32_t read;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret;
+    ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+    ret = parse_u32(CMD_ARGV[1], &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_DCR(target, addr, &read);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_DCR(target, addr, (read&data) );
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_dirty_fpu_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_dirty_gen_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return ERROR_OK;
+}
+
 COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
@@ -3600,6 +3720,126 @@ COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
     }
 
     ret = write_spr_reg(target, addr, data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_dirty_fpu_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_dirty_gen_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
+    if (CMD_ARGC != 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    uint32_t read;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret;
+    ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+    ret = parse_u32(CMD_ARGV[1], &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_spr_reg(target, addr, (uint8_t *)&read);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_spr_reg(target, addr, (data|read) );
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_dirty_fpu_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_dirty_gen_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
+    if (CMD_ARGC != 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    uint32_t read;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret;
+    ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+    ret = parse_u32(CMD_ARGV[1], &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_spr_reg(target, addr, (uint8_t *)&read);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_spr_reg(target, addr, (data^read) );
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_dirty_fpu_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_dirty_gen_regs(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
+    if (CMD_ARGC != 2)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    uint32_t read;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret;
+    ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+    ret = parse_u32(CMD_ARGV[1], &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_spr_reg(target, addr, (uint8_t *)&read);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = write_spr_reg(target, addr, (data&read) );
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -3821,6 +4061,7 @@ static const struct command_registration ppc476fp_tlb_exec_command_handlers[] =
       .help = "delete UTLB record",
       .chain = ppc476fp_tlb_drop_command_handlers},
      COMMAND_REGISTRATION_DONE};
+
 static const struct command_registration ppc476fp_dcr_exec_command_handlers[] =
     {{.name = "read",
       .handler = ppc476fp_handle_dcr_read_command,
@@ -3832,6 +4073,21 @@ static const struct command_registration ppc476fp_dcr_exec_command_handlers[] =
       .mode = COMMAND_EXEC,
       .usage = "<num> <data>",
       .help = "write <data> to DCR <num>"},
+     {.name = "or",
+      .handler = ppc476fp_handle_dcr_or_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num> <mask>",
+      .help = "DCR <num> = DCR <num> | <mask>"},
+     {.name = "xor",
+      .handler = ppc476fp_handle_dcr_xor_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num> <mask>",
+      .help = "DCR <num> = DCR <num> ^ <mask>"},
+     {.name = "and",
+      .handler = ppc476fp_handle_dcr_and_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num> <mask>",
+      .help = "DCR <num> = DCR <num> & <mask>"},
      COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration ppc476fp_spr_exec_command_handlers[] =
@@ -3845,6 +4101,21 @@ static const struct command_registration ppc476fp_spr_exec_command_handlers[] =
       .mode = COMMAND_EXEC,
       .usage = "<num> <data>",
       .help = "write <data> to SPR <num>"},
+     {.name = "or",
+      .handler = ppc476fp_handle_spr_or_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num> <mask>",
+      .help = "SPR <num> = SPR <num> | <mask>"},
+     {.name = "xor",
+      .handler = ppc476fp_handle_spr_xor_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num> <mask>",
+      .help = "SPR <num> = SPR <num> ^ <mask>"},
+     {.name = "and",
+      .handler = ppc476fp_handle_spr_and_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num> <mask>",
+      .help = "SPR <num> = SPR <num> & <mask>"},
      COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration
