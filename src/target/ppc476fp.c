@@ -2658,7 +2658,7 @@ static int ppc476fp_halt(struct target *target) {
 
     if (target->state == TARGET_HALTED) {
         LOG_WARNING("target was already halted");
-        return ERROR_TARGET_NOT_RUNNING;
+        return ERROR_OK;
     }
 
     if (target->state == TARGET_UNKNOWN)
