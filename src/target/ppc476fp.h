@@ -1002,8 +1002,7 @@ static int restore_state_before_run(struct target *target, int current,
  *
  * Выполняет кэширование регистров и устанавливает значения DBCR0, DBCR1, DBCR2
  * в состояние DBCR0_EDM_MASK | DBCR0_TRAP_MASK | DBCR0_FT_MASK, 0, 0; после
- * чего вызваеет функции invalidate_hw_breakpoint, invalidate_watchpoints и
- * clear_DBSR
+ * чего вызваеет функции invalidate_hw_breakpoint и invalidate_watchpoints
  */
 static int save_state_and_init_debug(struct target *target);
 
@@ -1094,6 +1093,14 @@ static int restore_phys_mem(struct target *target,
  * Эта функция создаёт запись для "текущего окна" физических адресов.
  */
 static int access_phys_mem(struct target *target, uint32_t new_ERPN_RPN);
+
+/**
+ * @brief Запись всех dirty регистров в память
+ * @param[in] target Указатель на объект target
+ * 
+ * @warning Должна вызываться в конце каждой интерфейсной функции
+*/
+static int flush_registers(struct target* target);
 
 /**
  * @}
