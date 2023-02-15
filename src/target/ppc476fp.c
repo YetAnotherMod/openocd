@@ -5,6 +5,21 @@
 #include "ppc476fp.h"
 #include <helper/log.h>
 
+static int flush_registers(struct target* target){
+    int ret = ERROR_OK;
+    if ( use_fpu_get(target) ){
+        ret = write_dirty_fpu_regs(target);
+    }
+    if ( ret != ERROR_OK ){
+        return ret;
+    }
+    ret = write_dirty_gen_regs(target);
+    if ( ret != ERROR_OK ){
+        return ret;
+    }
+    return ERROR_OK;
+}
+
 static inline uint32_t get_bits_32(uint32_t value, unsigned pos, unsigned len) {
     return (value >> pos) & ((1U << len) - 1);
 }
@@ -829,7 +844,7 @@ static int read_required_gen_regs(struct target *target) {
         ppc476fp->PC_reg->dirty = false;
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // Запись грязных (dirty) регистров FPU из кэша OpenOCD в таргет
@@ -868,7 +883,7 @@ static int write_dirty_fpu_regs(struct target *target) {
         }
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // Чтение всех регистров FPU
@@ -932,7 +947,7 @@ static int read_required_fpu_regs(struct target *target) {
             }
         }
     }
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // Помечает весь кэш регистров как невалидный
@@ -959,7 +974,9 @@ static int ppc476fp_get_gen_reg(struct reg *reg) {
     reg->valid = false;
     reg->dirty = false;
 
-    return read_required_gen_regs(target);
+    read_required_gen_regs(target);
+
+    return flush_registers(target);
 }
 
 // Изменение регистра в кэше. По идее, эта функция парная к
@@ -1009,7 +1026,7 @@ static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf) {
     reg->valid = true;
     reg->dirty = true;
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // чтение FPU регистра с таргета. аналогична ppc476fp_get_gen_reg
@@ -1022,7 +1039,11 @@ static int ppc476fp_get_fpu_reg(struct reg *reg) {
     reg->valid = false;
     reg->dirty = false;
 
-    return read_required_fpu_regs(target);
+    int ret = read_required_fpu_regs(target);
+    if ( ret != ERROR_OK ){
+        return ret;
+    }
+    return flush_registers(target);
 }
 
 // запись в кэш FPU регистра. аналогична ppc476fp_set_gen_reg
@@ -1041,7 +1062,7 @@ static int ppc476fp_set_fpu_reg(struct reg *reg, uint8_t *buf) {
     reg->dirty = true;
     reg->valid = true;
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // Заполнение полей структуры reg при её инициализации
@@ -1488,7 +1509,7 @@ static int save_state(struct target *target) {
     if (ret != ERROR_OK)
         return ret;
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int cache_l1i_invalidate(struct target *target) {
@@ -1522,14 +1543,6 @@ static int cache_l1i_invalidate(struct target *target) {
 static int restore_state(struct target *target) {
     int ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
     ret = enable_breakpoints(target);
     if (ret != ERROR_OK)
         return ret;
@@ -1539,6 +1552,11 @@ static int restore_state(struct target *target) {
         return ret;
 
     ret = cache_l1i_invalidate(target);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = flush_registers(target);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -1575,6 +1593,10 @@ static int restore_state_before_run(struct target *target, int current,
     if (ret != ERROR_OK)
         return ret;
 
+    ret = clear_DBSR(target);
+    if (ret != ERROR_OK)
+        return ret;
+
     return ERROR_OK;
 }
 
@@ -1600,11 +1622,7 @@ static int save_state_and_init_debug(struct target *target) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = clear_DBSR(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int reset_and_halt(struct target *target) {
@@ -2626,15 +2644,14 @@ static int ppc476fp_poll(struct target *target) {
                 target->debug_reason = DBG_REASON_BREAKPOINT;
             else if ((DBSR_value & DBSR_DAC_ALL_MASK) != 0)
                 target->debug_reason = DBG_REASON_WATCHPOINT;
-            ret = clear_DBSR(target);
-            if (ret != ERROR_OK)
-                return ret;
         }
 
         if (prev_state == TARGET_DEBUG_RUNNING)
             target_call_event_callbacks(target, TARGET_EVENT_DEBUG_HALTED);
         else
             target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+
+        flush_registers(target);
     }
 
     return ERROR_OK;
@@ -2840,15 +2857,7 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
         buffer += size;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
@@ -2886,15 +2895,7 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
         buffer += size;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int ppc476fp_checksum_memory(struct target *target,
@@ -2928,7 +2929,7 @@ static int ppc476fp_add_breakpoint(struct target *target,
             return ret;
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int ppc476fp_remove_breakpoint(struct target *target,
@@ -2954,7 +2955,7 @@ static int ppc476fp_remove_breakpoint(struct target *target,
             return ret;
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int ppc476fp_add_watchpoint(struct target *target,
@@ -3009,7 +3010,7 @@ static int ppc476fp_remove_watchpoint(struct target *target,
     if (ret != ERROR_OK)
         return ret;
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int ppc476fp_target_create(struct target *target, Jim_Interp *interp) {
@@ -3135,15 +3136,7 @@ static int ppc476fp_read_phys_memory(struct target *target,
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
@@ -3205,15 +3198,7 @@ static int ppc476fp_write_phys_memory(struct target *target,
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static int ppc476fp_mmu(struct target *target, int *enabled) {
@@ -3357,7 +3342,7 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_dump_command) {
         return ret;
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_tlb_create_command) {
@@ -3392,7 +3377,7 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_create_command) {
         return ret;
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_tlb_drop_command) {
@@ -3423,7 +3408,7 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_drop_command) {
         return ret;
     }
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_tlb_drop_all_command) {
@@ -3441,7 +3426,7 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_drop_all_command) {
 
     command_print(CMD, "All UTLB records have been deleted");
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_status_command) {
@@ -3503,17 +3488,9 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_read_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
     command_print(CMD, "DCR %u(0x%x) = %u(0x%08x)", addr, addr, data, data);
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_dcr_write_command) {
@@ -3539,15 +3516,7 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_write_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_dcr_or_command) {
@@ -3579,15 +3548,7 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_or_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_dcr_xor_command) {
@@ -3619,15 +3580,7 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_xor_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_dcr_and_command) {
@@ -3659,15 +3612,7 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_and_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
@@ -3688,17 +3633,9 @@ COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
     command_print(CMD, "SPR %u(0x%x) = %u(0x%08x)", addr, addr, data, data);
 
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
@@ -3724,15 +3661,7 @@ COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
@@ -3764,15 +3693,7 @@ COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
@@ -3804,15 +3725,7 @@ COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
@@ -3844,15 +3757,7 @@ COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
         return ret;
     }
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_fpu_on_command) {
@@ -3864,13 +3769,6 @@ COMMAND_HANDLER(ppc476fp_handle_use_fpu_on_command) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
     return ERROR_OK;
 }
 
@@ -3908,14 +3806,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_fpu_off_command) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_stack_on_command) {
@@ -3927,14 +3818,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_stack_on_command) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_stack_get_command) {
@@ -3959,14 +3843,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_stack_off_command) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_static_mem_on_command) {
@@ -3986,14 +3863,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_static_mem_on_command) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_static_mem_get_command) {
@@ -4022,15 +3892,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_static_mem_off_command) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_dirty_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = write_dirty_gen_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return ERROR_OK;
+    return flush_registers(target);
 }
 
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
