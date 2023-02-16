@@ -30,6 +30,10 @@ enum JDSR_bits{
     JDSR_RCFI_MASK = BIT(31-27),
     JDSR_IMC_MASK = BIT(31-28),
     JDSR_PSP_MASK = BIT(31 - 31),
+    JDSR_SER_MASK = JDSR_FPU_MASK | JDSR_APU_MASK | JDSR_ISE_MASK
+	    | JDSR_DTM_MASK | JDSR_ITM_MASK | JDSR_RMCE_MASK | JDSR_DSE_MASK
+	    | JDSR_AE_MASK | JDSR_PE_MASK | JDSR_SC_MASK | JDSR_RFI_MASK
+	    | JDSR_RCFI_MASK | JDSR_IMC_MASK | JDSR_PSP_MASK
 };
 
 enum JDCR_bits{
@@ -304,6 +308,15 @@ target_to_ppc476fp_tap_ext(struct target *target);
 /// @param[in] len количество байт для копирования
 static void memcpy_swapped(void *dst, const void *src, size_t len);
 
+/**
+ * @brief Анализ JDSR
+ * @param[in] JDSR Значение JDSR
+ * @return ERROR_OK - успешно, иначе - ошибка
+ * 
+ * Анализирует биты JDSR SER на наличие исключений, выводит текстовое описание
+ * ошибки и возвращает ошибку при наличии
+*/
+static int jdsr_log_ser(uint32_t JDSR);
 /**
  * @}
  * \defgroup config Функции конфигурирования обмена
