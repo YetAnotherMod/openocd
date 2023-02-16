@@ -20,6 +20,58 @@ static int flush_registers(struct target* target){
     return ERROR_OK;
 }
 
+static int jdsr_log_ser(uint32_t JDSR){
+    int ret = ERROR_OK;
+    if (JDSR & JDSR_FPU_MASK){
+        LOG_ERROR("Floating point unit unavailable exception");
+        ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+    }
+    if (JDSR & JDSR_APU_MASK){
+        LOG_ERROR("Auxiliary processor unit unavailable exception");
+        ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+    }
+    if (JDSR & JDSR_ISE_MASK){
+        LOG_ERROR("Instruction storage exception");
+    }
+    if (JDSR & JDSR_DTM_MASK){
+        LOG_ERROR("Data TLB miss exception");
+        ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+    }
+    if (JDSR & JDSR_ITM_MASK){
+        LOG_ERROR("Instruction TLB miss exception");
+        ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+    }
+    if (JDSR & JDSR_RMCE_MASK){
+        LOG_ERROR("Return from machine check exception");
+    }
+    if (JDSR & JDSR_DSE_MASK){
+        LOG_ERROR("Data storage exception");
+        ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+    }
+    if (JDSR & JDSR_AE_MASK){
+        LOG_ERROR("Alignment error");
+        ret = ERROR_TARGET_UNALIGNED_ACCESS;
+    }
+    if (JDSR & JDSR_PE_MASK){
+        LOG_ERROR("Program exception");
+        ret = ERROR_TARGET_TRANSLATION_FAULT;
+    }
+    if (JDSR & JDSR_SC_MASK){
+        LOG_ERROR("System call");
+    }
+    if (JDSR & JDSR_RFI_MASK){
+        LOG_ERROR("Return from interrupt");
+    }
+    if (JDSR & JDSR_RCFI_MASK){
+        LOG_ERROR("Return from critical interrupt");
+    }
+    if (JDSR & JDSR_IMC_MASK){
+        LOG_ERROR("Instruction-side machine check");
+        ret = ERROR_TARGET_TRANSLATION_FAULT;
+    }
+    return ret;
+}
+
 static inline uint32_t get_bits_32(uint32_t value, unsigned pos, unsigned len) {
     return (value >> pos) & ((1U << len) - 1);
 }
@@ -108,7 +160,6 @@ static int jtag_read_write_register(struct target *target,
     if (valid_bit != 0) {
         jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
         data_fields[0].out_value = (uint8_t *)zeros;
-        data_fields[0].in_value = NULL;
         jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
     }
 
@@ -144,15 +195,27 @@ static int read_JDSR(struct target *target, uint8_t *data) {
 // запись JTAG-регистра JDCR. Регистр доступен только для записи. Используется
 // для правления отладкой (старт/стоп, ss и т.п.)
 static int write_JDCR(struct target *target, uint32_t data) {
-    return jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR,
-                                    true, data, NULL);
+    uint32_t JDSR = 0;
+    int ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JDCR_READ_JDSR,
+                                    true, data, (uint8_t*)&JDSR);
+    if (ret != ERROR_OK){
+        return ret;
+    }
+
+    return jdsr_log_ser(JDSR);
 }
 
 // запись JTAG-регистра JISB. Регистр доступен только для записи. Запись в этот
 // регистр напрямую вставляет код инструкции в конвеер и исполняет её.
 static int stuff_code(struct target *target, uint32_t code) {
-    return jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR,
-                                    true, code, NULL);
+    uint32_t JDSR = 0;
+    int ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR,
+                                    true, code, (uint8_t *)&JDSR);
+    if (ret != ERROR_OK){
+        return ret;
+    }
+
+    return jdsr_log_ser(JDSR);
 }
 
 // чтение РОН через JTAG. Значение РОН при этом не меняется, но обычно
@@ -2651,7 +2714,7 @@ static int ppc476fp_poll(struct target *target) {
         else
             target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 
-        flush_registers(target);
+        return flush_registers(target);
     }
 
     return ERROR_OK;
@@ -2687,7 +2750,27 @@ static int ppc476fp_halt(struct target *target) {
 
     target->debug_reason = DBG_REASON_DBGRQ;
 
-    return ERROR_OK;
+    for ( int i = 0; i < 100 ; ++i ){
+        uint32_t JDSR_value = 0;
+        keep_alive();
+        ret = read_JDSR(target, (uint8_t *)&JDSR_value);
+        if (ret != ERROR_OK) {
+            target->state = TARGET_UNKNOWN;
+            return ret;
+        }
+
+        if ((JDSR_value & JDSR_PSP_MASK) != 0){
+            target->state = TARGET_HALTED;
+        break;
+        }
+    }
+    if ( target->state == TARGET_HALTED ){
+        target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+        return ERROR_OK;
+    }else{
+        target->state = TARGET_UNKNOWN;
+        return ERROR_TARGET_FAILURE;
+    }
 }
 
 static int ppc476fp_resume(struct target *target, int current,
@@ -2732,6 +2815,7 @@ static int ppc476fp_step(struct target *target, int current,
     target->state = TARGET_RUNNING;
     target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
     for (int i = 0; i < 100; ++i) {
+        keep_alive();
         ret = read_JDSR(target, (uint8_t *)&JDSR_value);
         if (ret != ERROR_OK) {
             target->state = TARGET_UNKNOWN;
@@ -2826,7 +2910,7 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
                                 uint32_t size, uint32_t count,
                                 uint8_t *buffer) {
     uint32_t i;
-    int ret;
+    int result = ERROR_OK;
 
     LOG_DEBUG("coreid=%i, address: 0x%lX, size: %u, count: 0x%X",
               target->coreid, address, size, count);
@@ -2840,24 +2924,26 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1))) {
-        LOG_ERROR("unaligned access");
-        return ERROR_TARGET_UNALIGNED_ACCESS;
-    }
-
     memset(buffer, 0, size * count); // clear result buffer
 
     for (i = 0; i < count; ++i) {
         keep_alive();
-        ret = read_virt_mem(target, (uint32_t)address, size, buffer);
-        if (ret != ERROR_OK)
-            return ret;
+        int ret = read_virt_mem(target, (uint32_t)address, size, buffer);
+        if (ret != ERROR_OK){
+            result = ret;
+        break;
+    }
 
         address += size;
         buffer += size;
     }
 
-    return flush_registers(target);
+    int ret = flush_registers(target);
+    if (result == ERROR_OK){
+        return ret;
+    }else{
+        return result;
+    }
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
@@ -2866,7 +2952,7 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
                                  uint32_t size, uint32_t count,
                                  const uint8_t *buffer) {
     uint32_t i;
-    int ret;
+    int result = ERROR_OK;
 
     LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
               address, size, count);
@@ -2880,22 +2966,23 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    if (((size == 4) && (address & 0x3u)) ||
-        ((size == 2) && (address & 0x1u))) {
-        LOG_ERROR("unaligned access");
-        return ERROR_TARGET_UNALIGNED_ACCESS;
-    }
-
     for (i = 0; i < count; ++i) {
         keep_alive();
-        ret = write_virt_mem(target, (uint32_t)address, size, buffer);
-        if (ret != ERROR_OK)
-            return ret;
+        int ret = write_virt_mem(target, (uint32_t)address, size, buffer);
+        if (ret != ERROR_OK){
+            result = ret;
+        break;
+    }
         address += size;
         buffer += size;
     }
 
-    return flush_registers(target);
+    int ret = flush_registers(target);
+    if (result == ERROR_OK){
+        return ret;
+    }else{
+        return result;
+    }
 }
 
 static int ppc476fp_checksum_memory(struct target *target,
@@ -2906,8 +2993,6 @@ static int ppc476fp_checksum_memory(struct target *target,
 
 static int ppc476fp_add_breakpoint(struct target *target,
                                    struct breakpoint *breakpoint) {
-    int ret;
-
     LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid,
               breakpoint->address, breakpoint->type, breakpoint->length);
 
@@ -2924,12 +3009,12 @@ static int ppc476fp_add_breakpoint(struct target *target,
     memset(breakpoint->orig_instr, 0, 4);
 
     if (breakpoint->type == BKPT_HARD) {
-        ret = check_add_hw_breakpoint(target, breakpoint);
-        if (ret != ERROR_OK)
+        int ret = check_add_hw_breakpoint(target, breakpoint);
+    if ( ret != ERROR_OK )
             return ret;
     }
 
-    return flush_registers(target);
+    return ERROR_OK;
 }
 
 static int ppc476fp_remove_breakpoint(struct target *target,
@@ -2947,15 +3032,16 @@ static int ppc476fp_remove_breakpoint(struct target *target,
 
     if (breakpoint->type == BKPT_HARD) {
         ret = unset_hw_breakpoint(target, breakpoint);
-        if (ret != ERROR_OK)
-            return ret;
     } else {
         ret = unset_soft_breakpoint(target, breakpoint);
-        if (ret != ERROR_OK)
-            return ret;
     }
 
-    return flush_registers(target);
+    if (ret != ERROR_OK){
+        flush_registers(target);
+        return ret;
+    }else{
+        return flush_registers(target);
+    }
 }
 
 static int ppc476fp_add_watchpoint(struct target *target,
@@ -3007,10 +3093,12 @@ static int ppc476fp_remove_watchpoint(struct target *target,
         return ERROR_OK;
 
     ret = unset_watchpoint(target, watchpoint);
-    if (ret != ERROR_OK)
+    if (ret != ERROR_OK){
+        flush_registers(target);
         return ret;
-
+    }else{
     return flush_registers(target);
+    }
 }
 
 static int ppc476fp_target_create(struct target *target, Jim_Interp *interp) {
@@ -3086,6 +3174,7 @@ static int ppc476fp_read_phys_memory(struct target *target,
     uint32_t new_ERPN_RPN;
     uint32_t i;
     int ret;
+    int result = ERROR_OK;
 
     LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
               address, size, count);
@@ -3099,44 +3188,50 @@ static int ppc476fp_read_phys_memory(struct target *target,
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    if (((size == 4) && (address & 0x3)) || ((size == 2) && (address & 0x1))) {
-        LOG_ERROR("unaligned access");
-        return ERROR_TARGET_UNALIGNED_ACCESS;
-    }
-
     memset(buffer, 0, size * count); // clear result buffer
 
     ret = init_phys_mem(target, &state);
-    if (ret != ERROR_OK)
-        return ret;
+    if (ret == ERROR_OK){
+        for (i = 0; i < count; ++i) {
+            keep_alive();
 
-    for (i = 0; i < count; ++i) {
-        keep_alive();
+            new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
+            if (new_ERPN_RPN != last_ERPN_RPN) {
+                ret = access_phys_mem(target, new_ERPN_RPN);
+                if (ret != ERROR_OK)
+                    break;
+                last_ERPN_RPN = new_ERPN_RPN;
+            }
 
-        new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
-        if (new_ERPN_RPN != last_ERPN_RPN) {
-            ret = access_phys_mem(target, new_ERPN_RPN);
+            ret = read_virt_mem(
+                target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size,
+                buffer);
             if (ret != ERROR_OK)
-                return ret;
-            last_ERPN_RPN = new_ERPN_RPN;
+                break;
+
+            address += size;
+            buffer += size;
         }
+        if(ret != ERROR_OK)
+            result = ret;
 
-        ret = read_virt_mem(
-            target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size,
-            buffer);
-        if (ret != ERROR_OK)
-            return ret;
-
-        address += size;
-        buffer += size;
     }
-
     // restore state
     ret = restore_phys_mem(target, &state);
-    if (ret != ERROR_OK)
-        return ret;
+    if(ret != ERROR_OK ){
+        LOG_ERROR("can't restore phys mem context");
+    if ( result == ERROR_OK ){
+        result = ret;
+    }
+    }
 
-    return flush_registers(target);
+    if (result != ERROR_OK){
+        if (flush_registers(target))
+            LOG_ERROR("can't flush registers");
+        return result;
+    }else{
+        return flush_registers(target);
+    }
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
@@ -3149,6 +3244,7 @@ static int ppc476fp_write_phys_memory(struct target *target,
     uint32_t new_ERPN_RPN;
     uint32_t i;
     int ret;
+    int result = ERROR_OK;
 
     LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
               address, size, count);
@@ -3162,22 +3258,14 @@ static int ppc476fp_write_phys_memory(struct target *target,
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    if (((size == 4) && (address & 0x3u)) ||
-        ((size == 2) && (address & 0x1u))) {
-        LOG_ERROR("unaligned access");
-        return ERROR_TARGET_UNALIGNED_ACCESS;
-    }
-
     ret = init_phys_mem(target, &state);
-    if (ret != ERROR_OK)
-        return ret;
-
+    if (ret == ERROR_OK){
     for (i = 0; i < count; ++i) {
         new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
         if (new_ERPN_RPN != last_ERPN_RPN) {
             ret = access_phys_mem(target, new_ERPN_RPN);
             if (ret != ERROR_OK)
-                return ret;
+                break;
             last_ERPN_RPN = new_ERPN_RPN;
         }
 
@@ -3186,19 +3274,29 @@ static int ppc476fp_write_phys_memory(struct target *target,
             target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size,
             buffer);
         if (ret != ERROR_OK)
-            return ret;
+            break;
         address += size;
         buffer += size;
     }
-
-    // the JTAG queue will be executed during the state restoring
-
+    if(ret != ERROR_OK)
+        result = ret;
+    }
     // restore state
     ret = restore_phys_mem(target, &state);
-    if (ret != ERROR_OK)
-        return ret;
+    if(ret != ERROR_OK ){
+        LOG_ERROR("can't restore phys mem context");
+    if ( result == ERROR_OK ){
+        result = ret;
+    }
+    }
 
+    if (result != ERROR_OK){
+    if (flush_registers(target))
+        LOG_ERROR("can't flush registers");
+    return result;
+    }else{
     return flush_registers(target);
+    }
 }
 
 static int ppc476fp_mmu(struct target *target, int *enabled) {
