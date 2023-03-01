@@ -96,15 +96,13 @@ target_to_ppc476fp_tap_ext(struct target *target) {
 
 // обращение к кэшированным данным регистров
 static inline uint32_t get_reg_value_32(const struct reg *reg) {
-    uint32_t result;
-    memcpy(&result, reg->value, 4);
-    return result;
+    return buf_get_u32(reg->value,0,32);
 }
 
 static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
     reg->dirty = true;
     reg->valid = true;
-    memcpy(reg->value, &value, 4);
+    buf_set_u32(reg->value, 0, 32, value);
 }
 
 // внутренние функции работы с jtag. все осмысленные действия делаются через
@@ -168,8 +166,7 @@ static int jtag_read_write_register(struct target *target,
         return ret;
 
     if (read_data != NULL) {
-        uint32_t tmp = buf_get_u32(data_in_buffer, 0, 32);
-        memcpy(read_data, &tmp, sizeof(tmp));
+        buf_cpy(data_in_buffer, read_data, 32);
     }
     return ERROR_OK;
 }
@@ -775,7 +772,7 @@ static int write_dirty_gen_regs(struct target *target) {
                             get_reg_value_32(ppc476fp->CR_reg));
         if (ret != ERROR_OK)
             return ret;
-        ret = stuff_code(target, 0x7C4FF120); // mtcr R2
+        ret = stuff_code(target, 0x7C0FF120 | (tmp_reg_data << 21u)); // mtcr tmp_reg_data
         if (ret != ERROR_OK)
             return ret;
         ppc476fp->CR_reg->dirty = false;
@@ -946,7 +943,7 @@ static int write_dirty_fpu_regs(struct target *target) {
         }
     }
 
-    return flush_registers(target);
+    return write_dirty_gen_regs(target);
 }
 
 // Чтение всех регистров FPU
@@ -1024,6 +1021,64 @@ static void invalidate_regs_status(struct target *target) {
     }
 }
 
+static int ppc476fp_get_msr(struct reg *reg){
+    struct target *target = reg->arch_info;
+
+    if (target->state != TARGET_HALTED)
+        return ERROR_TARGET_NOT_HALTED;
+
+    reg->valid = false;
+    reg->dirty = false;
+
+    read_required_gen_regs(target);
+
+    return flush_registers(target);
+}
+
+static int ppc476fp_set_msr(struct reg *reg, uint8_t *buf){
+    struct target *target = reg->arch_info;
+    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+    uint32_t MSR_prev_value = get_reg_value_32(ppc476fp->MSR_reg);
+    uint32_t MSR_new_value;
+    size_t i;
+    int ret;
+
+    if (target->state != TARGET_HALTED)
+        return ERROR_TARGET_NOT_HALTED;
+    
+    MSR_new_value = buf_get_u32(buf, 0, 32);
+    if (((MSR_prev_value ^ MSR_new_value) & MSR_FP_MASK) != 0) {
+        if ((MSR_prev_value & MSR_FP_MASK) != 0) {
+            ret = write_dirty_fpu_regs(target);
+            if (ret != ERROR_OK)
+                return ret;
+        }
+        // invalidate FPU registers
+        for (i = 0; i < FPR_REG_COUNT; ++i) {
+            ppc476fp->fpr_regs[i]->valid = false;
+            ppc476fp->fpr_regs[i]->dirty = false;
+        }
+        ppc476fp->FPSCR_reg->valid = false;
+        ppc476fp->FPSCR_reg->dirty = false;
+    }
+
+        // write MSR to the CPU
+    ret = write_MSR(target, MSR_new_value);
+    if (ret != ERROR_OK)
+        return ret;
+    buf_cpy(buf, reg->value, reg->size);
+    reg->valid = true;
+    reg->dirty = false;
+
+    if (((MSR_prev_value ^ MSR_new_value) & MSR_FP_MASK) != 0) {
+        if ((MSR_new_value & MSR_FP_MASK) != 0) {
+            read_required_fpu_regs(target);
+        }
+
+    }
+    return flush_registers(target);
+}
+
 // Помечает конкретный регистр как невалидный и запрашивает его чтение из
 // таргета Текстовым поиском по коду видно, что функция используется только для
 // чтения невалидных регистров Почему регистр инвалидируется - вопрос
@@ -1049,41 +1104,9 @@ static int ppc476fp_get_gen_reg(struct reg *reg) {
 // изменении MSR отключается FPU, предварительно кэш регистров FPU сбрасывается
 static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf) {
     struct target *target = reg->arch_info;
-    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    uint32_t MSR_prev_value = get_reg_value_32(ppc476fp->MSR_reg);
-    uint32_t MSR_new_value;
-    size_t i;
-    int ret;
 
     if (target->state != TARGET_HALTED)
         return ERROR_TARGET_NOT_HALTED;
-
-    if (reg == ppc476fp->MSR_reg) {
-        MSR_new_value = buf_get_u32(buf, 0, 31);
-        if (((MSR_prev_value ^ MSR_new_value) & MSR_FP_MASK) != 0) {
-            if ((MSR_prev_value & MSR_FP_MASK) != 0) {
-                ret = write_dirty_fpu_regs(target);
-                if (ret != ERROR_OK)
-                    return ret;
-            }
-            // write MSR to the CPU
-            ret = write_MSR(target, MSR_new_value);
-            if (ret != ERROR_OK)
-                return ret;
-            // invalidate FPU registers
-            for (i = 0; i < FPR_REG_COUNT; ++i) {
-                ppc476fp->fpr_regs[i]->valid = false;
-                ppc476fp->fpr_regs[i]->dirty = false;
-            }
-            ppc476fp->FPSCR_reg->valid = false;
-            ppc476fp->FPSCR_reg->dirty = false;
-            // set MSR register status
-            buf_cpy(buf, reg->value, reg->size);
-            reg->valid = true;
-            reg->dirty = false;
-            return ERROR_OK;
-        }
-    }
 
     buf_cpy(buf, reg->value, reg->size);
     reg->valid = true;
@@ -1176,6 +1199,9 @@ static void build_reg_caches(struct target *target) {
     static const struct reg_arch_type ppc476fp_fpu_reg_type = {
         .get = ppc476fp_get_fpu_reg, .set = ppc476fp_set_fpu_reg};
 
+    static const struct reg_arch_type ppc476fp_msr_type = {
+        .get = ppc476fp_get_msr, .set = ppc476fp_set_msr};
+
     gen_cache->name = "PowerPC General Purpose Registers";
     gen_cache->num_regs = GEN_CACHE_REG_COUNT;
     gen_cache->reg_list = calloc(GEN_CACHE_REG_COUNT, sizeof(struct reg));
@@ -1201,7 +1227,7 @@ static void build_reg_caches(struct target *target) {
         ppc476fp->fpr_regs[i] =
             fill_reg(target, all_index++, fpu_regs++, strdup(reg_name),
                      REG_TYPE_IEEE_DOUBLE, 64, &ppc476fp_fpu_reg_type,
-                     "org.gnu.gdb.power.fpu"); // F0-R31
+                     "org.gnu.gdb.power.fpu"); // F0-F31
     }
 
     ppc476fp->PC_reg =
@@ -1209,7 +1235,7 @@ static void build_reg_caches(struct target *target) {
                  &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
     ppc476fp->MSR_reg =
         fill_reg(target, all_index++, gen_regs++, "MSR", REG_TYPE_UINT32, 32,
-                 &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
+                 &ppc476fp_msr_type, "org.gnu.gdb.power.core");
     ppc476fp->CR_reg =
         fill_reg(target, all_index++, gen_regs++, "CR", REG_TYPE_UINT32, 32,
                  &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core");
@@ -1312,6 +1338,9 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
                          (const uint8_t *)&TRAP_INSTRUCTION_CODE);
     if (ret != ERROR_OK)
         return ret;
+    ret = cache_l1i_invalidate(target, (uint32_t)bp->address, 4);
+    if (ret != ERROR_OK)
+        return ret;
 
     // test
     ret =
@@ -1343,6 +1372,10 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     // проверка установки
     ret =
         read_virt_mem(target, (uint32_t)bp->address, 4, (uint8_t *)&test_value);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = cache_l1i_invalidate(target, (uint32_t)bp->address, 4);
     if (ret != ERROR_OK)
         return ret;
 
@@ -1413,18 +1446,14 @@ static void invalidate_hw_breakpoints(struct target *target) {
 // поддерживает ядро
 static int check_add_hw_breakpoint(struct target *target,
                                    struct breakpoint *breakpoint) {
-    struct breakpoint *bp;
-    int bp_count;
-
-    bp = target->breakpoints;
-    bp_count = 0;
-    while (bp != NULL) {
+    
+    int bp_count = 0;
+    for (struct breakpoint *bp = target->breakpoints; bp != NULL ; bp=bp->next) {
         if (bp->type != BKPT_HARD)
             continue;
         if (bp != breakpoint) // do not count the added breakpoint, it may be in
                               // the list
             ++bp_count;
-        bp = bp->next;
     }
     if (bp_count == HW_BP_NUMBER)
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -1575,8 +1604,11 @@ static int save_state(struct target *target) {
     return flush_registers(target);
 }
 
-static int cache_l1i_invalidate(struct target *target) {
-    // isync; msync; ici; dci 0; isync; msync;
+static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t len) {
+    // isync; msync; ici; isync; msync;
+    const uint32_t begin = addr & (~31u);
+    const uint32_t end = ((addr + len) & (~31u)) + ((addr+len)&31u ? 32 : 0);
+    int result = ERROR_OK;
     int ret = stuff_code(target, 0x4c00012c);
     if (ret != ERROR_OK) {
         return ret;
@@ -1585,20 +1617,29 @@ static int cache_l1i_invalidate(struct target *target) {
     if (ret != ERROR_OK) {
         return ret;
     }
-    ret = stuff_code(target, 0x7c00078c);
-    if (ret != ERROR_OK) {
-        return ret;
+    for ( uint32_t i = begin; i < end ; i+= 32 ){
+	ret = write_gpr_reg (target, tmp_reg_addr, i);
+        if (ret != ERROR_OK) {
+	    result = ret;
+            break;
+        }
+        ret = stuff_code(target, 0x7c0007ac | (tmp_reg_addr<<15));
+        if (ret != ERROR_OK) {
+	    result = ret;
+            break;
+        }
     }
-    ret = stuff_code(target, 0x7c00038c);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+
     ret = stuff_code(target, 0x4c00012c);
     if (ret != ERROR_OK) {
-        return ret;
+        result = ret;
     }
     ret = stuff_code(target, 0x7c0004ac);
-    return ret;
+    if (ret != ERROR_OK) {
+        return ret;
+    }else{
+        return result;
+    }
 }
 
 // восстановление контекста перед снятием HALT
@@ -1613,11 +1654,6 @@ static int restore_state(struct target *target) {
     ret = enable_watchpoints(target);
     if (ret != ERROR_OK)
         return ret;
-
-    ret = cache_l1i_invalidate(target);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
 
     ret = flush_registers(target);
     if (ret != ERROR_OK) {
@@ -2765,6 +2801,7 @@ static int ppc476fp_halt(struct target *target) {
         }
     }
     if ( target->state == TARGET_HALTED ){
+        save_state_and_init_debug(target);
         target_call_event_callbacks(target, TARGET_EVENT_HALTED);
         return ERROR_OK;
     }else{
@@ -2968,16 +3005,19 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
 
     for (i = 0; i < count; ++i) {
         keep_alive();
-        int ret = write_virt_mem(target, (uint32_t)address, size, buffer);
+        int ret = write_virt_mem(target, (uint32_t)address + i*size, size, buffer + i*size);
         if (ret != ERROR_OK){
             result = ret;
-        break;
-    }
-        address += size;
-        buffer += size;
+            break;
+        }
     }
 
-    int ret = flush_registers(target);
+    int ret = cache_l1i_invalidate(target, address, size * count);
+    if ((ret != ERROR_OK) && (result == ERROR_OK)){
+        result = ret;
+    }
+
+    ret = flush_registers(target);
     if (result == ERROR_OK){
         return ret;
     }else{
@@ -3864,6 +3904,9 @@ COMMAND_HANDLER(ppc476fp_handle_use_fpu_on_command) {
     struct target *target = get_current_target(CMD_CTX);
 
     int ret = use_fpu_on(target);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = read_required_fpu_regs(target);
     if (ret != ERROR_OK)
         return ret;
 

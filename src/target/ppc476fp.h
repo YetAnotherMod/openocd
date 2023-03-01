@@ -974,6 +974,8 @@ static int save_state(struct target *target);
 /**
  * @brief Инвалидация l1 кэша инструкций
  * @param[in] target Указатель на объект target
+ * @param[in] addr Адрес начала изменённого региона
+ * @param[in] len Размер изменённого региона
  * @return ERROR_OK - успешно, иначе - код ошибки
  *
  * Последовательность isinc, msync, ici, dci 0, isync, msync.
@@ -984,7 +986,7 @@ static int save_state(struct target *target);
  * тем самым убираются все данные в L1I, которые могут отличаться от L2.
  * Необходимо для работы модифицируемого кода, в том числе точек останова.
  */
-static int cache_l1i_invalidate(struct target *target);
+static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t len);
 
 /**
  * @brief Подготовка таргета к запуску
@@ -1146,11 +1148,30 @@ static int ppc476fp_get_gen_reg(struct reg *reg);
 static int ppc476fp_set_gen_reg(struct reg *reg, uint8_t *buf);
 
 /**
+ * @brief Чтение MSR
+ * @param[in,out] reg Указатель на регистр, который требуется прочитать
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ *
+ * Аналогично ppc476fp_get_gen_reg, но читиает MSR.
+ */
+static int ppc476fp_get_msr(struct reg *reg);
+
+/**
+ * @brief Запись MSR
+ * @param[in,out] reg Указатель на регистр, который требуется записать
+ * @param[out] buf Буфер с новым значением
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ *
+ * Записывает в MSR новое значение. Если меняется бит FP, выполняет действия
+ * с регистрами FPU: инвалидирует либо актуализирует кэш регистров FPU.
+ */
+static int ppc476fp_set_msr(struct reg *reg, uint8_t *buf);
+/**
  * @brief Чтение указанного регистра FPU
  * @param[in,out] reg Указатель на регистр, который требуется прочитать
  * @return ERROR_OK - успешно, иначе - код ошибки
  *
- * Аналогично ooc476fp_get_gen_reg, но для FPU
+ * Аналогично ppc476fp_get_gen_reg, но для FPU
  */
 static int ppc476fp_get_fpu_reg(struct reg *reg);
 
