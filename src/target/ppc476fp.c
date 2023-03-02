@@ -3367,6 +3367,8 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
             ppc476fp->fpr_regs[i]->valid = false;
             ppc476fp->fpr_regs[i]->dirty = false;
         }
+	ppc476fp->FPSCR_reg->valid = false;
+	ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->use_fpu = false;
     }
         return ERROR_OK;
@@ -3380,6 +3382,8 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
             ppc476fp->fpr_regs[i]->valid = false;
             ppc476fp->fpr_regs[i]->dirty = false;
         }
+	ppc476fp->FPSCR_reg->valid = false;
+	ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->use_fpu = false;
     }
         return ERROR_OK;
@@ -3395,9 +3399,11 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
             ppc476fp->fpr_regs[i]->valid = false;
             ppc476fp->fpr_regs[i]->dirty = false;
         }
+	ppc476fp->FPSCR_reg->valid = false;
+	ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->use_fpu = false;
     }
-        return ERROR_FAIL;
+        return ERROR_OK;
     }
     return ERROR_FAIL;
 }
