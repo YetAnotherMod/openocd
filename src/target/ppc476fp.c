@@ -626,7 +626,7 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
             return ret;
 
         write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
-        code = 0xc800fff8 | (reg_num << 21) |
+        code = 0xc8000000 | (reg_num << 21) |
                (tmp_reg_addr << 16); // lfd Fx, 0(tmp_reg_addr)
         ret = stuff_code(target, code);
         if (ret != ERROR_OK)
@@ -1605,7 +1605,7 @@ static int save_state(struct target *target) {
 }
 
 static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t len) {
-    // isync; msync; ici; isync; msync;
+    // isync; msync; icbi 0, tmp_reg_addr; isync; msync;
     const uint32_t begin = addr & (~31u);
     const uint32_t end = ((addr + len) & (~31u)) + ((addr+len)&31u ? 32 : 0);
     int result = ERROR_OK;
@@ -1623,7 +1623,7 @@ static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t l
 	    result = ret;
             break;
         }
-        ret = stuff_code(target, 0x7c0007ac | (tmp_reg_addr<<15));
+        ret = stuff_code(target, 0x7c0007ac | (tmp_reg_addr<<11));
         if (ret != ERROR_OK) {
 	    result = ret;
             break;
@@ -3376,6 +3376,10 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
                 return ERROR_FAIL;
             }
         }
+        for (int i = 0; i < FPR_REG_COUNT; ++i) {
+            ppc476fp->fpr_regs[i]->valid = false;
+            ppc476fp->fpr_regs[i]->dirty = false;
+        }
         ppc476fp->use_fpu = false;
     }
         return ERROR_OK;
@@ -3386,6 +3390,10 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
         int ret = write_dirty_fpu_regs(target);
         if (ret != ERROR_OK) {
             return ret;
+        }
+        for (int i = 0; i < FPR_REG_COUNT; ++i) {
+            ppc476fp->fpr_regs[i]->valid = false;
+            ppc476fp->fpr_regs[i]->dirty = false;
         }
         ppc476fp->use_fpu = false;
     }
