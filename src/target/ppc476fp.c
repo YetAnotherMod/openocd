@@ -1327,7 +1327,7 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     int ret;
     uint32_t test_value;
 
-    static const uint32_t TRAP_INSTRUCTION_CODE = 0x7FE00008;
+    static const uint32_t TRAP_INSTRUCTION_CODE = 0x0800e07f;
 
     ret = read_virt_mem(target, (uint32_t)bp->address, 4,
                         (uint8_t *)bp->orig_instr);
@@ -2739,10 +2739,13 @@ static int ppc476fp_poll(struct target *target) {
                 ((DBSR_value & DBSR_DAC_ALL_MASK) != 0))
                 target->debug_reason =
                     DBG_REASON_WPTANDBKPT; // watchpoints and breakpoints
-            if ((DBSR_value & DBSR_IAC_ALL_MASK) != 0)
+	    else if ((DBSR_value & DBSR_IAC_ALL_MASK) != 0)
                 target->debug_reason = DBG_REASON_BREAKPOINT;
             else if ((DBSR_value & DBSR_DAC_ALL_MASK) != 0)
                 target->debug_reason = DBG_REASON_WATCHPOINT;
+	    else if ((DBSR_value & DBSR_TRAP_MASK) != 0){
+		    target->debug_reason = DBG_REASON_BREAKPOINT;
+	    }
         }
 
         if (prev_state == TARGET_DEBUG_RUNNING)
