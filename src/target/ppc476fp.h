@@ -992,23 +992,27 @@ static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t l
 /**
  * @brief Подготовка таргета к запуску
  * @param[in] target Указатель на объект target
+ * @param[in] handle_breakpoints Если 0 - запуск без точек останова,
+ * 		если !=0 - запуск с точками останова
  * @return ERROR_OK - успешно, иначе - код ошибки
  *
  * Запись на таргет регастров запись основных и FPU регистров в таргет,
  * активация точек останова, инвалидация L1I.
  */
-static int restore_state(struct target *target);
+static int restore_state(struct target *target, int handle_breakpoints);
 
 /**
  * @brief Восстановление контекста перед запуском
  * @param[in,out] target Указатель на объект target
  * @param[in] current Если 1 - старт с текущего места, иначе - с address
  * @param[in] address Указание адреса старта
+ * @param[in] handle_breakpoints Если 0 - запуск без точек останова,
+ * 		если !=0 - запуск с точками останова
  * @param[in] debug_reason Информация и причине возобновления исполнения
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
 static int restore_state_before_run(struct target *target, int current,
-                                    target_addr_t address,
+                                    target_addr_t address, int handle_breakpoints,
                                     enum target_debug_reason debug_reason);
 
 /**

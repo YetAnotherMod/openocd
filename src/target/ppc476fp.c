@@ -1379,6 +1379,11 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     if (ret != ERROR_OK)
         return ret;
 
+    uint8_t *p = (uint8_t *)&test_value;
+
+    LOG_DEBUG("%02x%02x%02x%02x", p[0], p[1], p[2], p[3]);
+    LOG_DEBUG("%02x%02x%02x%02x", bp->orig_instr[0], bp->orig_instr[1], bp->orig_instr[2], bp->orig_instr[3]);
+
     if (memcmp(&test_value, bp->orig_instr, 4) == 0)
         bp->is_set = 0;
     else
@@ -1390,15 +1395,11 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp) {
 
 // Снятие всех программных точек останова
 static int unset_all_soft_breakpoints(struct target *target) {
-    struct breakpoint *bp;
-    int ret;
-
-    bp = target->breakpoints;
-    while (bp != NULL) {
-        if (bp->type == BKPT_SOFT) {
-            ret |= unset_soft_breakpoint(target, bp);
-            LOG_WARNING("soft breakpoint cannot be removed at address 0x%08X",
-                        (uint32_t)bp->address);
+    for(struct breakpoint *bp = target->breakpoints;bp != NULL;bp = bp->next) {
+        if ((bp->type == BKPT_SOFT) && (bp-> is_set != 0)) {
+            if (unset_soft_breakpoint(target, bp) != ERROR_OK)
+                LOG_WARNING("soft breakpoint cannot be removed at address 0x%08X",
+                            (uint32_t)bp->address);
         }
     }
 
@@ -1644,22 +1645,28 @@ static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t l
 
 // восстановление контекста перед снятием HALT
 // процессор обязан быть в состоянии HALT
-static int restore_state(struct target *target) {
+static int restore_state(struct target *target, int handle_breakpoints) {
     int ret;
 
-    ret = enable_breakpoints(target);
-    if (ret != ERROR_OK)
-        return ret;
+    if ( handle_breakpoints ){
+        ret = enable_breakpoints(target);
+        if (ret != ERROR_OK)
+           return ret;
 
-    ret = enable_watchpoints(target);
-    if (ret != ERROR_OK)
-        return ret;
+       ret = enable_watchpoints(target);
+       if (ret != ERROR_OK)
+           return ret;
+    }else{
+        unset_all_soft_breakpoints(target); // ignore return value
+        invalidate_hw_breakpoints(target); // if an error occurs
+        invalidate_watchpoints(target);    // if an error occurs
+    }
 
     ret = flush_registers(target);
     if (ret != ERROR_OK) {
         return ret;
     }
-
+    
     invalidate_regs_status(target);
     invalidate_tlb_cache(target);
 
@@ -1669,7 +1676,7 @@ static int restore_state(struct target *target) {
 // проверка, что процессор в состоянии HALT, правка PC в кэше (при
 // необходимости) и восстановление контекста
 static int restore_state_before_run(struct target *target, int current,
-                                    target_addr_t address,
+                                    target_addr_t address, int handle_breakpoints,
                                     enum target_debug_reason debug_reason) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     int ret;
@@ -1688,7 +1695,7 @@ static int restore_state_before_run(struct target *target, int current,
 
     target->debug_reason = debug_reason;
 
-    ret = restore_state(target);
+    ret = restore_state(target, handle_breakpoints);
     if (ret != ERROR_OK)
         return ret;
 
@@ -2818,7 +2825,7 @@ static int ppc476fp_resume(struct target *target, int current,
                            int debug_execution) {
     LOG_DEBUG("coreid=%i", target->coreid);
 
-    int ret = restore_state_before_run(target, current, address,
+    int ret = restore_state_before_run(target, current, address, handle_breakpoints,
                                        DBG_REASON_NOTHALTED);
     if (ret != ERROR_OK)
         return ret;
@@ -2843,7 +2850,7 @@ static int ppc476fp_step(struct target *target, int current,
     LOG_DEBUG("coreid=%i", target->coreid);
 
     uint32_t JDSR_value = 0;
-    int ret = restore_state_before_run(target, current, address,
+    int ret = restore_state_before_run(target, current, address, 0,
                                        DBG_REASON_SINGLESTEP);
     if (ret != ERROR_OK)
         return ret;
@@ -2924,7 +2931,7 @@ static int ppc476fp_soft_reset_halt(struct target *target) {
     // work
 
     // restore state with breakpoints
-    ret = restore_state(target);
+    ret = restore_state(target, 1);
     if (ret != ERROR_OK)
         return ret;
 
