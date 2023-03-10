@@ -3360,8 +3360,8 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
             ppc476fp->fpr_regs[i]->valid = false;
             ppc476fp->fpr_regs[i]->dirty = false;
         }
-	ppc476fp->FPSCR_reg->valid = false;
-	ppc476fp->FPSCR_reg->dirty = false;
+        ppc476fp->FPSCR_reg->valid = false;
+        ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->use_fpu = false;
     }
         return ERROR_OK;
@@ -3375,8 +3375,8 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
             ppc476fp->fpr_regs[i]->valid = false;
             ppc476fp->fpr_regs[i]->dirty = false;
         }
-	ppc476fp->FPSCR_reg->valid = false;
-	ppc476fp->FPSCR_reg->dirty = false;
+        ppc476fp->FPSCR_reg->valid = false;
+        ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->use_fpu = false;
     }
         return ERROR_OK;
@@ -3392,8 +3392,8 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
             ppc476fp->fpr_regs[i]->valid = false;
             ppc476fp->fpr_regs[i]->dirty = false;
         }
-	ppc476fp->FPSCR_reg->valid = false;
-	ppc476fp->FPSCR_reg->dirty = false;
+        ppc476fp->FPSCR_reg->valid = false;
+        ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->use_fpu = false;
     }
         return ERROR_OK;
@@ -3415,6 +3415,7 @@ static int use_stack_on(struct target *target) {
             use_stack_off(target, reg_action_ignore);
             return ret;
         }
+        flush_registers(target);
     }
     ppc476fp->use_stack = true;
     return ERROR_OK;
@@ -3913,9 +3914,11 @@ COMMAND_HANDLER(ppc476fp_handle_use_fpu_on_command) {
     int ret = use_fpu_on(target);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_required_fpu_regs(target);
-    if (ret != ERROR_OK)
-        return ret;
+    if ( target->state == TARGET_HALTED ){
+        ret = read_required_fpu_regs(target);
+        if (ret != ERROR_OK)
+            return ret;
+    }
 
     return ERROR_OK;
 }
@@ -3950,11 +3953,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_fpu_off_command) {
         return ERROR_COMMAND_SYNTAX_ERROR;
     }
 
-    int ret = use_fpu_off(target, action);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return flush_registers(target);
+    return use_fpu_off(target, action);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_stack_on_command) {
@@ -3962,11 +3961,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_stack_on_command) {
         return ERROR_COMMAND_SYNTAX_ERROR;
 
     struct target *target = get_current_target(CMD_CTX);
-    int ret = use_stack_on(target);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return flush_registers(target);
+    return use_stack_on(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_stack_get_command) {
@@ -3987,11 +3982,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_stack_off_command) {
         return ERROR_COMMAND_SYNTAX_ERROR;
 
     struct target *target = get_current_target(CMD_CTX);
-    int ret = use_stack_off(target, reg_action_error);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return flush_registers(target);
+    return use_stack_off(target, reg_action_error);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_static_mem_on_command) {
@@ -4007,11 +3998,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_static_mem_on_command) {
         return ERROR_COMMAND_ARGUMENT_INVALID;
     }
 
-    ret = use_static_mem_on(target, addr);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return flush_registers(target);
+    return use_static_mem_on(target, addr);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_static_mem_get_command) {
@@ -4035,12 +4022,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_static_mem_off_command) {
         return ERROR_COMMAND_SYNTAX_ERROR;
     struct target *target = get_current_target(CMD_CTX);
 
-    int ret = use_static_mem_off(target, reg_action_error);
-
-    if (ret != ERROR_OK)
-        return ret;
-
-    return flush_registers(target);
+    return use_static_mem_off(target, reg_action_error);
 }
 
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
