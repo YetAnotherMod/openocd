@@ -961,51 +961,33 @@ static int read_required_fpu_regs(struct target *target) {
 
     reg = ppc476fp->fpr_regs[0];
     ret = read_fpr_reg(target, 0, (uint64_t *)reg->value);
-    if (ret != ERROR_OK) {
-        if (ret == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
-            for (i = 1; i < FPR_REG_COUNT; ++i) {
-                reg = ppc476fp->fpr_regs[i];
-                reg->valid = false;
-                reg->dirty = false;
-            }
-            ppc476fp->FPSCR_reg->valid = false;
-            ppc476fp->FPSCR_reg->dirty = false;
-            return ERROR_OK;
-        } else {
-            return ret;
-        }
-    } else {
 
-        reg->valid = true;
+    for (i = 0; i < FPR_REG_COUNT; ++i) {
+        reg = ppc476fp->fpr_regs[i];
         reg->dirty = false;
-
-        for (i = 1; i < FPR_REG_COUNT; ++i) {
-            reg = ppc476fp->fpr_regs[i];
-            if (!reg->valid) {
-                ret = read_fpr_reg(target, i, (uint64_t *)reg->value);
-                if (ret != ERROR_OK) {
-                    return ret;
-                } else {
-                    reg->valid = true;
-                    reg->dirty = false;
-                }
+        if (!reg->valid) {
+            ret = read_fpr_reg(target, i, (uint64_t *)reg->value);
+            if (ret == ERROR_OK) {
+                reg->valid = true;
+            } else if (ret == ERROR_TARGET_RESOURCE_NOT_AVAILABLE){
+                reg->valid = false;
+            } else {
+                return ret;
             }
         }
+    }
 
-        if (!ppc476fp->FPSCR_reg->valid) {
+    if (!ppc476fp->FPSCR_reg->valid) {
+        if ( ppc476fp->fpr_regs[0]->valid ){
             ppc476fp->fpr_regs[0]->dirty = true;
             ret = stuff_code(target, 0xFC00048E); // mffs F0
             if (ret != ERROR_OK)
                 return ret;
-            ret = read_fpr_reg(target, 0, &value);
-            set_reg_value_32(ppc476fp->FPSCR_reg, (uint32_t)(value));
-            if (ret != ERROR_OK) {
-                return ret;
-            } else {
-                ppc476fp->FPSCR_reg->valid = true;
-                ppc476fp->FPSCR_reg->dirty = false;
-            }
         }
+        ret = read_fpr_reg(target, 0, &value);
+        set_reg_value_32(ppc476fp->FPSCR_reg, (uint32_t)(value));
+        ppc476fp->FPSCR_reg->dirty = false;
+        ppc476fp->FPSCR_reg->valid = ppc476fp->fpr_regs[0]->valid;
     }
     return flush_registers(target);
 }
