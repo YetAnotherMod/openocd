@@ -3363,6 +3363,7 @@ static int use_fpu_on(struct target *target) {
         target_to_ppc476fp(target)->use_fpu = true;
         return ERROR_OK;
     }
+    LOG_ERROR("use_stack or use_static_mem need for use_fpu");
     return ERROR_FAIL;
 }
 
