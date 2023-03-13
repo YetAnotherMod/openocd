@@ -1714,18 +1714,20 @@ static int save_state_and_init_debug(struct target *target) {
 }
 
 static int reset_and_halt(struct target *target) {
-    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t value_JDSR;
     int i;
     int ret;
 
     unset_all_soft_breakpoints(target); // ignore return value
+    write_DBCR0(target, 0);
 
     target->state = TARGET_RESET;
-    invalidate_regs_status(target); // if an error occurs
-    ppc476fp->DBCR0_value = 0;
-    invalidate_hw_breakpoints(target); // if an error occurs
-    invalidate_watchpoints(target);    // if an error occurs
+
+    invalidate_regs_status(target);
+    invalidate_tlb_cache(target);
+    use_fpu_off(target, reg_action_ignore);
+    use_stack_off(target, reg_action_ignore);
+    use_static_mem_off(target, reg_action_ignore);
 
     ret = write_JDCR(target, JDCR_RESET_CHIP | JDCR_STO_MASK);
     if (ret != ERROR_OK)
@@ -1748,6 +1750,7 @@ static int reset_and_halt(struct target *target) {
     if ((value_JDSR & JDSR_PSP_MASK) == 0)
         return ERROR_FAIL;
 
+    target->state = TARGET_HALTED;
     ret = save_state_and_init_debug(target);
     if (ret != ERROR_OK)
         return ret;
@@ -2870,11 +2873,7 @@ static int ppc476fp_step(struct target *target, int current,
 static int ppc476fp_assert_reset(struct target *target) {
     LOG_DEBUG("coreid=%i", target->coreid);
 
-    invalidate_regs_status(target);
-    invalidate_tlb_cache(target);
-    use_fpu_off(target, reg_action_ignore);
-    use_stack_off(target, reg_action_ignore);
-    use_static_mem_off(target, reg_action_ignore);
+    ppc476fp_halt(target);
 
     return reset_and_halt(target);
 }
@@ -2889,6 +2888,7 @@ static int ppc476fp_deassert_reset(struct target *target) {
         ret = write_JDCR(target, 0);
         if (ret != ERROR_OK)
             return ret;
+        target->state = TARGET_RUNNING;
     }
 
     return ERROR_OK;
