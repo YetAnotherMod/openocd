@@ -1714,10 +1714,18 @@ static int save_state_and_init_debug(struct target *target) {
 }
 
 static int reset_and_halt(struct target *target) {
-    uint32_t value_JDSR;
-    int i;
-    int ret;
+    int ret = halt_and_wait(target, 100);
 
+    if ( ret != ERROR_OK ){
+        LOG_ERROR ("Can't stop CPU. send RESET_SYS");
+        ret = write_JDCR(target, JDCR_RESET_SYS | JDCR_STO_MASK);
+        if (ret != ERROR_OK)
+            return ret;
+
+        ret = halt_and_wait(target, 100);
+        if (ret != ERROR_OK)
+            return ret;
+    }
     unset_all_soft_breakpoints(target); // ignore return value
     write_DBCR0(target, 0);
 
@@ -1733,22 +1741,9 @@ static int reset_and_halt(struct target *target) {
     if (ret != ERROR_OK)
         return ret;
 
-    // stop the processor
-    for (i = 0; i < 100; ++i) {
-        ret = write_JDCR(target, JDCR_STO_MASK);
-        if (ret != ERROR_OK)
-            return ret;
-
-        ret = read_JDSR(target, (uint8_t *)&value_JDSR);
-        if (ret != ERROR_OK)
-            return ret;
-
-        if ((value_JDSR & JDSR_PSP_MASK) != 0)
-            break;
-    }
-
-    if ((value_JDSR & JDSR_PSP_MASK) == 0)
-        return ERROR_FAIL;
+    ret = halt_and_wait(target, 100);
+    if (ret != ERROR_OK)
+        return ret;
 
     target->state = TARGET_HALTED;
     ret = save_state_and_init_debug(target);
@@ -2762,26 +2757,13 @@ static int ppc476fp_arch_state(struct target *target) {
     return ERROR_OK;
 }
 
-static int ppc476fp_halt(struct target *target) {
-    int ret;
+static int halt_and_wait(struct target *target, int count){
 
-    LOG_DEBUG("coreid=%i", target->coreid);
-
-    if (target->state == TARGET_HALTED) {
-        LOG_WARNING("target was already halted");
-        return ERROR_OK;
-    }
-
-    if (target->state == TARGET_UNKNOWN)
-        LOG_WARNING("target was in unknown state when halt was requested");
-
-    ret = write_JDCR(target, JDCR_STO_MASK);
+    int ret = write_JDCR(target, JDCR_STO_MASK);
     if (ret != ERROR_OK)
         return ret;
 
-    target->debug_reason = DBG_REASON_DBGRQ;
-
-    for ( int i = 0; i < 100 ; ++i ){
+    for ( int i = 0; i < count ; ++i ){
         uint32_t JDSR_value = 0;
         keep_alive();
         ret = read_JDSR(target, (uint8_t *)&JDSR_value);
@@ -2796,13 +2778,34 @@ static int ppc476fp_halt(struct target *target) {
         }
     }
     if ( target->state == TARGET_HALTED ){
-        save_state_and_init_debug(target);
-        target_call_event_callbacks(target, TARGET_EVENT_HALTED);
         return ERROR_OK;
     }else{
         target->state = TARGET_UNKNOWN;
         return ERROR_TARGET_FAILURE;
     }
+}
+
+static int ppc476fp_halt(struct target *target) {
+    int ret;
+
+    LOG_DEBUG("coreid=%i", target->coreid);
+
+    if (target->state == TARGET_HALTED) {
+        LOG_WARNING("target was already halted");
+        return ERROR_OK;
+    }
+
+    if (target->state == TARGET_UNKNOWN)
+        LOG_WARNING("target was in unknown state when halt was requested");
+
+    target->debug_reason = DBG_REASON_DBGRQ;
+
+   ret = halt_and_wait(target, 100);
+    if ( ret == ERROR_OK ){
+        save_state_and_init_debug(target);
+        target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+    }
+    return ret;
 }
 
 static int ppc476fp_resume(struct target *target, int current,
@@ -2834,7 +2837,6 @@ static int ppc476fp_step(struct target *target, int current,
                          target_addr_t address, int handle_breakpoints) {
     LOG_DEBUG("coreid=%i", target->coreid);
 
-    uint32_t JDSR_value = 0;
     int ret = restore_state_before_run(target, current, address, 0,
                                        DBG_REASON_SINGLESTEP);
     if (ret != ERROR_OK)
@@ -2846,34 +2848,23 @@ static int ppc476fp_step(struct target *target, int current,
 
     target->state = TARGET_RUNNING;
     target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-    for (int i = 0; i < 100; ++i) {
-        keep_alive();
-        ret = read_JDSR(target, (uint8_t *)&JDSR_value);
+    ret = halt_and_wait(target, 100);
+    if ( ret == ERROR_OK ){
+        target->state = TARGET_HALTED;
+        ret = save_state_and_init_debug(target);
         if (ret != ERROR_OK) {
             target->state = TARGET_UNKNOWN;
             return ret;
         }
-        if ((JDSR_value & JDSR_PSP_MASK) == JDSR_PSP_MASK) {
-            target->state = TARGET_HALTED;
-            ret = save_state_and_init_debug(target);
-            if (ret != ERROR_OK) {
-                target->state = TARGET_UNKNOWN;
-                return ret;
-            }
-            target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-            return ERROR_OK;
-        }
+        target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+        return ERROR_OK;
     }
 
-    target->state = TARGET_UNKNOWN;
-
-    return ERROR_OK;
+    return ERROR_TARGET_FAILURE;
 }
 
 static int ppc476fp_assert_reset(struct target *target) {
     LOG_DEBUG("coreid=%i", target->coreid);
-
-    ppc476fp_halt(target);
 
     return reset_and_halt(target);
 }
