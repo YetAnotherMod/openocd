@@ -2726,13 +2726,12 @@ static int ppc476fp_poll(struct target *target) {
                 ((DBSR_value & DBSR_DAC_ALL_MASK) != 0))
                 target->debug_reason =
                     DBG_REASON_WPTANDBKPT; // watchpoints and breakpoints
-	    else if ((DBSR_value & DBSR_IAC_ALL_MASK) != 0)
+            else if ((DBSR_value & DBSR_IAC_ALL_MASK) != 0)
                 target->debug_reason = DBG_REASON_BREAKPOINT;
             else if ((DBSR_value & DBSR_DAC_ALL_MASK) != 0)
                 target->debug_reason = DBG_REASON_WATCHPOINT;
-	    else if ((DBSR_value & DBSR_TRAP_MASK) != 0){
-		    target->debug_reason = DBG_REASON_BREAKPOINT;
-	    }
+    	    else if ((DBSR_value & DBSR_TRAP_MASK) != 0)
+	    	    target->debug_reason = DBG_REASON_BREAKPOINT;
         }
 
         if (prev_state == TARGET_DEBUG_RUNNING)
@@ -2741,6 +2740,11 @@ static int ppc476fp_poll(struct target *target) {
             target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 
         return flush_registers(target);
+    }else if ((state == TARGET_RUNNING) && (target->state == TARGET_HALTED)){
+        LOG_WARNING("Unexpected target resume detected!");
+        target->state = TARGET_RUNNING;
+        invalidate_regs_status(target);
+        invalidate_tlb_cache(target);
     }
 
     return ERROR_OK;
