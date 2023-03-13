@@ -1027,6 +1027,17 @@ static int restore_state_before_run(struct target *target, int current,
 static int save_state_and_init_debug(struct target *target);
 
 /**
+ * @brief Остановить процессор
+ * @param[in,out] target Указатель на объект таргет
+ * @param[in] count Количество попыток опроса в процессе ожиданя останова
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ *
+ * Отправляет команду на останов процессора, после чего читает состояние, ожидая
+ * флаг о остановке процессора. Если не дожидается, возвращает ошибку
+*/
+static int halt_and_wait(struct target *target, int count);
+
+/**
  * @brief Сброс и остановка процессора
  * @param[in,out] target Указатель на объект target
  * @return ERROR_OK - успешно, иначе - код ошибки
