@@ -122,7 +122,8 @@ static int jtag_read_write_register(struct target *target,
     struct ppc476fp_tap_ext *tap_ext = target_to_ppc476fp_tap_ext(target);
     struct scan_field instr_field;
     uint8_t instr_buffer[4];
-    struct scan_field data_fields[1];
+    uint8_t tap_alive[2][4];
+    struct scan_field data_fields;
     uint8_t data_out_buffer[8];
     uint64_t zeros = 0;
 
@@ -142,23 +143,24 @@ static int jtag_read_write_register(struct target *target,
                 instr_without_coreid | coreid_mask[target->coreid]);
     instr_field.num_bits = target->tap->ir_length;
     instr_field.out_value = instr_buffer;
-    instr_field.in_value = NULL;
+    instr_field.in_value = tap_alive[0];
     jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
 
     buf_set_u32(data_out_buffer, 0, 32, write_data);
     buf_set_u32(data_out_buffer, 32, 1, valid_bit);
-    data_fields[0].num_bits = 33;
-    data_fields[0].out_value = data_out_buffer;
-    data_fields[0].in_value = data_in_buffer;
-    jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
+    data_fields.num_bits = 33;
+    data_fields.out_value = data_out_buffer;
+    data_fields.in_value = data_in_buffer;
+    jtag_add_dr_scan(target->tap, 1, &data_fields, TAP_IDLE);
 
     // !!! IMPORTANT
     // make additional request with valid bit == 0
     // to correct a JTAG communication BUG
     if (valid_bit != 0) {
+        instr_field.in_value = tap_alive[1];
         jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
-        data_fields[0].out_value = (uint8_t *)zeros;
-        jtag_add_dr_scan(target->tap, 1, data_fields, TAP_IDLE);
+        data_fields.out_value = (uint8_t *)zeros;
+        jtag_add_dr_scan(target->tap, 1, &data_fields, TAP_IDLE);
     }
 
     ret = jtag_execute_queue();
@@ -168,7 +170,16 @@ static int jtag_read_write_register(struct target *target,
     if (read_data != NULL) {
         buf_cpy(data_in_buffer, read_data, 32);
     }
-    return ERROR_OK;
+
+    uint32_t tap_alive1 = 0, tap_alive2 = 0;
+    buf_cpy(tap_alive[0], &tap_alive1, target->tap->ir_length);
+    buf_cpy(tap_alive[1], &tap_alive2, target->tap->ir_length);
+    
+    if ( (tap_alive1 == 1) && (!valid_bit || (tap_alive2 == 1)) ){
+        return ERROR_OK;
+    }
+    
+    return ERROR_JTAG_DEVICE_ERROR;
 }
 
 // чтение JTAG-регистра DBDR. Это единственный способ получить ответные данные
