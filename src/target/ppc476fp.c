@@ -1361,11 +1361,6 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     if (ret != ERROR_OK)
         return ret;
 
-    uint8_t *p = (uint8_t *)&test_value;
-
-    LOG_DEBUG("%02x%02x%02x%02x", p[0], p[1], p[2], p[3]);
-    LOG_DEBUG("%02x%02x%02x%02x", bp->orig_instr[0], bp->orig_instr[1], bp->orig_instr[2], bp->orig_instr[3]);
-
     if (memcmp(&test_value, bp->orig_instr, 4) == 0)
         bp->is_set = 0;
     else
@@ -2817,7 +2812,7 @@ static int ppc476fp_resume(struct target *target, int current,
                            int debug_execution) {
     LOG_DEBUG("coreid=%i", target->coreid);
 
-    int ret = restore_state_before_run(target, current, address, handle_breakpoints,
+    int ret = restore_state_before_run(target, current, address, 1,
                                        DBG_REASON_NOTHALTED);
     if (ret != ERROR_OK)
         return ret;
