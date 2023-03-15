@@ -2890,6 +2890,8 @@ static int ppc476fp_deassert_reset(struct target *target) {
         if (ret != ERROR_OK)
             return ret;
         target->state = TARGET_RUNNING;
+        invalidate_regs_status(target);
+        invalidate_tlb_cache(target);
     }
 
     return ERROR_OK;
