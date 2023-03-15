@@ -3640,6 +3640,29 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_read_command) {
     return flush_registers(target);
 }
 
+COMMAND_HANDLER(ppc476fp_handle_dcr_get_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_DCR(target, addr, &data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    command_print_sameline(CMD, "%u", data);
+
+    return flush_registers(target);
+}
+
 COMMAND_HANDLER(ppc476fp_handle_dcr_write_command) {
     if (CMD_ARGC != 2)
         return ERROR_COMMAND_SYNTAX_ERROR;
@@ -3781,6 +3804,29 @@ COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
     }
 
     command_print(CMD, "SPR %u(0x%x) = %u(0x%08x)", addr, addr, data, data);
+
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_handle_spr_get_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    struct target *target = get_current_target(CMD_CTX);
+
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    ret = read_spr_reg(target, addr, (uint8_t *)&data);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    command_print_sameline(CMD, "%u", data);
 
     return flush_registers(target);
 }
@@ -4055,12 +4101,17 @@ static const struct command_registration ppc476fp_tlb_exec_command_handlers[] =
       .chain = ppc476fp_tlb_drop_command_handlers},
      COMMAND_REGISTRATION_DONE};
 
-static const struct command_registration ppc476fp_dcr_exec_command_handlers[] =
-    {{.name = "read",
+static const struct command_registration ppc476fp_dcr_exec_command_handlers[] ={
+     {.name = "read",
       .handler = ppc476fp_handle_dcr_read_command,
       .mode = COMMAND_EXEC,
       .usage = "<num>",
-      .help = "read from DCR <num>"},
+      .help = "read from DCR <num> (long output)"},
+     {.name = "get",
+      .handler = ppc476fp_handle_dcr_get_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num>",
+      .help = "read from DCR <num> (only value)"},
      {.name = "write",
       .handler = ppc476fp_handle_dcr_write_command,
       .mode = COMMAND_EXEC,
@@ -4083,12 +4134,17 @@ static const struct command_registration ppc476fp_dcr_exec_command_handlers[] =
       .help = "DCR <num> = DCR <num> & <mask>"},
      COMMAND_REGISTRATION_DONE};
 
-static const struct command_registration ppc476fp_spr_exec_command_handlers[] =
-    {{.name = "read",
+static const struct command_registration ppc476fp_spr_exec_command_handlers[] ={
+     {.name = "read",
       .handler = ppc476fp_handle_spr_read_command,
       .mode = COMMAND_EXEC,
       .usage = "<num>",
-      .help = "read from SPR <num>"},
+      .help = "read from SPR <num> (long output)"},
+     {.name = "get",
+      .handler = ppc476fp_handle_spr_get_command,
+      .mode = COMMAND_EXEC,
+      .usage = "<num>",
+      .help = "read from SPR <num> (only value)"},
      {.name = "write",
       .handler = ppc476fp_handle_spr_write_command,
       .mode = COMMAND_EXEC,
