@@ -2842,10 +2842,8 @@ static int ppc476fp_resume(struct target *target, int current,
 
     if (debug_execution) {
         target->state = TARGET_DEBUG_RUNNING;
-        target_call_event_callbacks(target, TARGET_EVENT_DEBUG_RESUMED);
     } else {
         target->state = TARGET_RUNNING;
-        target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
     }
 
     return ERROR_OK;
@@ -2865,7 +2863,6 @@ static int ppc476fp_step(struct target *target, int current,
         return ret;
 
     target->state = TARGET_RUNNING;
-    target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
     ret = halt_and_wait(target, 100);
     if ( ret == ERROR_OK ){
         target->state = TARGET_HALTED;
@@ -2874,7 +2871,6 @@ static int ppc476fp_step(struct target *target, int current,
             target->state = TARGET_UNKNOWN;
             return ret;
         }
-        target_call_event_callbacks(target, TARGET_EVENT_HALTED);
         return ERROR_OK;
     }
 
