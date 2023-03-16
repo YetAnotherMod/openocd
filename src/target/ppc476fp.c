@@ -121,10 +121,10 @@ static int jtag_read_write_register(struct target *target,
     static const uint32_t coreid_mask[4] = {0x4, 0x5, 0x6, 0x3};
     struct ppc476fp_tap_ext *tap_ext = target_to_ppc476fp_tap_ext(target);
     struct scan_field instr_field;
-    uint8_t instr_buffer[4];
-    uint8_t tap_alive[2][4];
+    uint8_t instr_buffer[4] = {0,0,0,0};
+    uint8_t tap_alive[2][4] = {{0,0,0,0},{0,0,0,0}};
     struct scan_field data_fields;
-    uint8_t data_out_buffer[8];
+    uint8_t data_out_buffer[8] = {0,0,0,0,0,0,0,0};
     uint64_t zeros = 0;
 
     // !!! IMPORTANT
@@ -970,9 +970,6 @@ static int read_required_fpu_regs(struct target *target) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    reg = ppc476fp->fpr_regs[0];
-    ret = read_fpr_reg(target, 0, (uint64_t *)reg->value);
-
     for (i = 0; i < FPR_REG_COUNT; ++i) {
         reg = ppc476fp->fpr_regs[i];
         reg->dirty = false;
@@ -995,7 +992,7 @@ static int read_required_fpu_regs(struct target *target) {
             if (ret != ERROR_OK)
                 return ret;
         }
-        ret = read_fpr_reg(target, 0, &value);
+        read_fpr_reg(target, 0, &value);
         set_reg_value_32(ppc476fp->FPSCR_reg, (uint32_t)(value));
         ppc476fp->FPSCR_reg->dirty = false;
         ppc476fp->FPSCR_reg->valid = ppc476fp->fpr_regs[0]->valid;
@@ -1183,7 +1180,6 @@ static void build_reg_caches(struct target *target) {
     int all_index = 0;
     struct reg *gen_regs;
     struct reg *fpu_regs;
-    char reg_name[64];
     int i;
 
     static const struct reg_arch_type ppc476fp_gen_reg_type = {
@@ -1209,16 +1205,26 @@ static void build_reg_caches(struct target *target) {
     fpu_regs = fpu_cache->reg_list;
 
     for (i = 0; i < GPR_REG_COUNT; ++i) {
-        sprintf(reg_name, "R%i", i);
+        static const char names[GPR_REG_COUNT][4] = {
+            "R0","R1","R2","R3","R4","R5","R6","R7","R8","R9",
+            "R10","R11","R12","R13","R14","R15","R16","R17","R18","R19",
+            "R20","R21","R22","R23","R24","R25","R26","R27","R28","R29",
+            "R30","R31"
+        };
         ppc476fp->gpr_regs[i] = fill_reg(
-            target, all_index++, gen_regs++, strdup(reg_name), REG_TYPE_UINT32,
+            target, all_index++, gen_regs++, names[i], REG_TYPE_UINT32,
             32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core"); // R0-R31
     }
 
     for (i = 0; i < FPR_REG_COUNT; ++i) {
-        sprintf(reg_name, "F%i", i);
+        static const char names[GPR_REG_COUNT][4] = {
+            "F0","F1","F2","F3","F4","F5","F6","F7","F8","F9",
+            "F10","F11","F12","F13","F14","F15","F16","F17","F18","F19",
+            "F20","F21","F22","F23","F24","F25","F26","F27","F28","F29",
+            "F30","F31"
+        };
         ppc476fp->fpr_regs[i] =
-            fill_reg(target, all_index++, fpu_regs++, strdup(reg_name),
+            fill_reg(target, all_index++, fpu_regs++, names[i],
                      REG_TYPE_IEEE_DOUBLE, 64, &ppc476fp_fpu_reg_type,
                      "org.gnu.gdb.power.fpu"); // F0-F31
     }
@@ -2050,9 +2056,7 @@ static void print_tlb_table_header(struct command_invocation *cmd) {
 
 static void print_tlb_table_record(struct command_invocation *cmd,
                                    int index_way, struct tlb_hw_record *hw) {
-    char buffer[256];
-
-    sprintf(buffer,
+    command_print(CMD, 
             "%04X  %i %1s%05X  %i  %4s  %03X %05X   %X  %2s  %i    %i   %X   "
             "%X    %X  %02X%i",
             hw->tid, (int)((hw->data[0] & TLB_0_TS_MASK) != 0),
@@ -2071,10 +2075,9 @@ static void print_tlb_table_record(struct command_invocation *cmd,
             get_bits_32(hw->data[2], TLB_2_UXWR_BIT_POS, TLB_2_UXWR_BIT_LEN),
             get_bits_32(hw->data[2], TLB_2_SXWR_BIT_POS, TLB_2_SXWR_BIT_LEN),
             index_way >> 2, index_way & 0x3);
-    command_print(CMD, "%s", buffer);
 }
 
-static int init_phys_mem(struct target *target, struct phys_mem_state *state) {
+static int save_phys_mem(struct target *target, struct phys_mem_state *state){
     int ret;
 
     ret = read_MSR(target, (uint8_t *)&state->saved_MSR);
@@ -2094,6 +2097,11 @@ static int init_phys_mem(struct target *target, struct phys_mem_state *state) {
         read_spr_reg(target, SPR_REG_NUM_USPCR, (uint8_t *)&state->saved_USPCR);
     if (ret != ERROR_OK)
         return ret;
+    return ERROR_OK;
+}
+
+static int init_phys_mem(struct target *target, struct phys_mem_state *state) {
+    int ret;
 
     // set MSR
     ret = write_MSR(target, state->saved_MSR | MSR_PR_MASK |
@@ -2248,12 +2256,20 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
     unsigned arg_index;
     const char *arg;
     const char *p;
-    char cmd[64];
     int ret;
 
-    memset(params, 0, sizeof *params);
+    params->mask=0;
+    params->tid=0;
+    params->ts=0;
     params->dsiz = DSIZ_4K;
     params->way = -1;
+    params->il1i=0;
+    params->il1d=0;
+    params->u=0;
+    params->wimg=0;
+    params->en=0;
+    params->uxwr=0;
+    params->sxwr=0;
     params->bltd = 6;
 
     for (arg_index = 0; arg_index < argc; ++arg_index) {
@@ -2263,49 +2279,45 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
         if (p == NULL)
             return ERROR_COMMAND_ARGUMENT_INVALID;
 
-        if ((size_t)(p - arg) >= sizeof cmd)
-            return ERROR_COMMAND_ARGUMENT_INVALID;
-        memset(cmd, 0, sizeof cmd);
-        memcpy(cmd, arg, p - arg);
         ++p;
 
-        if (strcmp(cmd, "epn") == 0)
+        if (strncmp(arg, "epn=", p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_EPN, 0xFFFFF, p,
                                       &params->mask, &params->epn);
-        else if (strcmp(cmd, "rpn") == 0)
+        else if (strncmp(arg, "rpn=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_RPN, 0xFFFFF, p,
                                       &params->mask, &params->rpn);
-        else if (strcmp(cmd, "erpn") == 0)
+        else if (strncmp(arg, "erpn=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_ERPN, 0x3FF, p,
                                       &params->mask, &params->erpn);
-        else if (strcmp(cmd, "tid") == 0)
+        else if (strncmp(arg, "tid=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_TID, 0xFFFF, p,
                                       &params->mask, &params->tid);
-        else if (strcmp(cmd, "ts") == 0)
+        else if (strncmp(arg, "ts=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_TS, 1, p, &params->mask,
                                       &params->ts);
-        else if (strcmp(cmd, "il1i") == 0)
+        else if (strncmp(arg, "il1i=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_IL1I, 1, p, &params->mask,
                                       &params->il1i);
-        else if (strcmp(cmd, "il1d") == 0)
+        else if (strncmp(arg, "il1d=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_IL1D, 1, p, &params->mask,
                                       &params->il1d);
-        else if (strcmp(cmd, "u") == 0)
+        else if (strncmp(arg, "u=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_U, 0xF, p, &params->mask,
                                       &params->u);
-        else if (strcmp(cmd, "wimg") == 0)
+        else if (strncmp(arg, "wimg=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_WIMG, 0xF, p,
                                       &params->mask, &params->wimg);
-        else if (strcmp(cmd, "uxwr") == 0)
+        else if (strncmp(arg, "uxwr=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_UXWR, 0x7, p,
                                       &params->mask, &params->uxwr);
-        else if (strcmp(cmd, "sxwr") == 0)
+        else if (strncmp(arg, "sxwr=",p-arg) == 0)
             ret = parse_uint32_params(TLB_PARAMS_MASK_SXWR, 0x7, p,
                                       &params->mask, &params->sxwr);
-        else if (strcmp(cmd, "dsiz") == 0)
+        else if (strncmp(arg, "dsiz=",p-arg) == 0)
             ret = parse_dsiz_params(TLB_PARAMS_MASK_DSIZ, p, &params->mask,
                                     &params->dsiz);
-        else if (strcmp(cmd, "en") == 0) {
+        else if (strncmp(arg, "en=",p-arg) == 0) {
             if ((params->mask & TLB_PARAMS_MASK_EN) != 0)
                 ret = ERROR_COMMAND_ARGUMENT_INVALID;
             else {
@@ -2317,7 +2329,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
                     ret = strcmp(p, "BE") == 0 ? ERROR_OK
                                                : ERROR_COMMAND_ARGUMENT_INVALID;
             }
-        } else if (strcmp(cmd, "way") == 0) {
+        } else if (strncmp(arg, "way=",p-arg) == 0) {
             if ((params->mask & TLB_PARAMS_MASK_WAY) != 0)
                 ret = ERROR_COMMAND_ARGUMENT_INVALID;
             else {
@@ -2330,7 +2342,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
                                               &params->mask,
                                               (uint32_t *)&params->way);
             }
-        } else if (strcmp(cmd, "bltd") == 0) {
+        } else if (strncmp(arg, "bltd=",p-arg) == 0) {
             if ((params->mask & TLB_PARAMS_MASK_BLTD) != 0)
                 ret = ERROR_COMMAND_ARGUMENT_INVALID;
             else {
@@ -2589,7 +2601,7 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd,
                                             struct target *target,
                                             struct tlb_command_params *params) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    struct tlb_hw_record hw;
+    struct tlb_hw_record hw = {{0,0,0},0,0};
     uint32_t saved_MMUCR;
     uint32_t ts;
     int index_way;
@@ -2600,8 +2612,6 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd,
     ret = read_spr_reg(target, SPR_REG_NUM_MMUCR, (uint8_t *)&saved_MMUCR);
     if (ret != ERROR_OK)
         return ret;
-
-    memset(&hw, 0, sizeof hw);
 
     for (index_way = 0; index_way < TLB_NUMBER; ++index_way) {
         keep_alive();
@@ -2652,7 +2662,7 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd,
 }
 
 static int handle_tlb_drop_all_command_internal(struct target *target) {
-    struct tlb_hw_record hw;
+    struct tlb_hw_record hw = {{0,0,0},0,0};
     uint32_t saved_MMUCR;
     int i;
     int ret;
@@ -2678,8 +2688,6 @@ static int handle_tlb_drop_all_command_internal(struct target *target) {
 
     invalidate_tlb_cache(target);
 
-    memset(&hw, 0, sizeof hw);
-
     for (i = 0; i < TLB_NUMBER; ++i) {
         keep_alive();
         ret = write_tlb(target, i, &hw);
@@ -2701,7 +2709,7 @@ static int handle_tlb_drop_all_command_internal(struct target *target) {
 }
 
 static int ppc476fp_poll(struct target *target) {
-    enum target_state state = target->state;
+    enum target_state state;
     uint32_t JDSR_value, DBSR_value;
     int ret;
 
@@ -3225,6 +3233,11 @@ static int ppc476fp_read_phys_memory(struct target *target,
 
     memset(buffer, 0, size * count); // clear result buffer
 
+    if ( save_phys_mem(target,&state) != ERROR_OK ){
+        LOG_ERROR("Can't save context");
+        return ERROR_TARGET_FAILURE;
+    }
+
     ret = init_phys_mem(target, &state);
     if (ret == ERROR_OK){
         for (i = 0; i < count; ++i) {
@@ -3292,6 +3305,11 @@ static int ppc476fp_write_phys_memory(struct target *target,
     if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) ||
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
+
+    if ( save_phys_mem(target,&state) != ERROR_OK ){
+        LOG_ERROR("Can't save context");
+        return ERROR_TARGET_FAILURE;
+    }
 
     ret = init_phys_mem(target, &state);
     if (ret == ERROR_OK){
