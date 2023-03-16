@@ -4074,6 +4074,244 @@ COMMAND_HANDLER(ppc476fp_handle_use_static_mem_off_command) {
     return use_static_mem_off(target, reg_action_error);
 }
 
+COMMAND_HANDLER(ppc476fp_code_isync_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    return stuff_code(target, 0x4c00012c);
+}
+
+COMMAND_HANDLER(ppc476fp_code_msync_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    return stuff_code(target, 0x7c0004ac);
+}
+
+COMMAND_HANDLER(ppc476fp_code_ici_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    return stuff_code(target, 0x7c00078c);
+}
+
+COMMAND_HANDLER(ppc476fp_code_dci_0_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    return stuff_code(target, 0x7c00038c);
+}
+
+COMMAND_HANDLER(ppc476fp_code_dci_2_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    return stuff_code(target, 0x7c40038c);
+}
+
+COMMAND_HANDLER(ppc476fp_code_dcbf_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
+    }
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+
+    ret = stuff_code(target, 0x7c0000ac | (tmp_reg_addr << 11));
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run dcbf 0, R%i", tmp_reg_addr);
+        return ret;
+    }
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_code_dcbt_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
+    }
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+
+    ret = stuff_code(target, 0x7c00022c | (tmp_reg_addr << 11));
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run dcbt 0, R%i", tmp_reg_addr);
+        return ret;
+    }
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_code_dcread_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    struct target *target = get_current_target(CMD_CTX);
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
+    }
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+    target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+
+    ret = stuff_code(target, 0x7c00028c | (tmp_reg_data << 21) | (tmp_reg_addr << 11) );
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run dcread R%i, R0, R%i", tmp_reg_data, tmp_reg_addr);
+        return ret;
+    }
+
+    ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't read rt value from tmp reg");
+        return ret;
+    }
+
+    command_print_sameline(CMD, "%u", addr);
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_code_icbi_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
+    }
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+
+    ret = stuff_code(target, 0x7c0007ac | (tmp_reg_addr << 11));
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run icbi 0, R%i", tmp_reg_addr);
+        return ret;
+    }
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_code_icbt_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
+    }
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+
+    ret = stuff_code(target, 0x7c00002c | (tmp_reg_addr << 11));
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run icbt 0, R%i", tmp_reg_addr);
+        return ret;
+    }
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_code_icread_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    struct target *target = get_current_target(CMD_CTX);
+    int ret = parse_u32(CMD_ARGV[0], &addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
+    }
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+    ret = stuff_code(target, 0x7c0007cc | (tmp_reg_addr << 11) );
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run icread R0, R%i", tmp_reg_addr);
+        return ret;
+    }
+
+    return flush_registers(target);
+}
+
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
     {{.name = "all",
       .handler = ppc476fp_handle_tlb_drop_all_command,
@@ -4228,6 +4466,60 @@ static const struct command_registration
          .help = "using static memory in openocd enabled?"},
         COMMAND_REGISTRATION_DONE};
 
+static const struct command_registration ppc476fp_code_dci_command_handlers[] = {
+    {.name = "0",
+    .handler = ppc476fp_code_dci_0_command,
+    .mode = COMMAND_EXEC,
+    .help = "Invalidate L1D cache"},
+    {.name = "2",
+    .handler = ppc476fp_code_dci_2_command,
+    .mode = COMMAND_EXEC,
+    .help = "Invalidate L1D and L2 cache"},
+    COMMAND_REGISTRATION_DONE};
+
+static const struct command_registration ppc476fp_code_exec_command_handlers[] = {
+    {.name = "isync",
+    .handler = ppc476fp_code_isync_command,
+    .mode = COMMAND_EXEC,
+    .help = "instruction sync"},
+    {.name = "msync",
+    .handler = ppc476fp_code_msync_command,
+    .mode = COMMAND_EXEC,
+    .help = "memory sync"},
+    {.name = "ici",
+    .handler = ppc476fp_code_ici_command,
+    .mode = COMMAND_EXEC,
+    .help = "instruction cache invalidate"},
+    {.name = "dci",
+    .chain = ppc476fp_code_dci_command_handlers,
+    .mode = COMMAND_EXEC,
+    .help = "data cache invalidate"},
+    {.name = "dcbf",
+    .handler = ppc476fp_code_dcbf_command,
+    .mode = COMMAND_EXEC,
+    .help = "Data Cache Block Flush"},
+    {.name = "dcbt",
+    .handler = ppc476fp_code_dcbt_command,
+    .mode = COMMAND_EXEC,
+    .help = "Data Cache Block Touch"},
+    {.name = "dcread",
+    .handler = ppc476fp_code_dcread_command,
+    .mode = COMMAND_EXEC,
+    .help = "Data Cache Read"},
+    {.name = "icbi",
+    .handler = ppc476fp_code_icbi_command,
+    .mode = COMMAND_EXEC,
+    .help = "Instruction Cache Block Invalidate"},
+    {.name = "icbt",
+    .handler = ppc476fp_code_icbt_command,
+    .mode = COMMAND_EXEC,
+    .help = "Instruction Cache Block Touch"},
+    {.name = "icread",
+    .handler = ppc476fp_code_icread_command,
+    .mode = COMMAND_EXEC,
+    .help = "Instruction Cache Read"},
+    COMMAND_REGISTRATION_DONE};
+
 static const struct command_registration ppc476fp_exec_command_handlers[] = {
     {.name = "tlb",
      .handler = ppc476fp_handle_tlb_dump_command,
@@ -4271,6 +4563,11 @@ static const struct command_registration ppc476fp_exec_command_handlers[] = {
      .usage = "",
      .help = "use static memory region in openocd internal func, must be "
              "aligned at 8 bytes and 1k size"},
+    {.name = "code",
+     .chain = ppc476fp_code_exec_command_handlers,
+     .mode = COMMAND_EXEC,
+     .usage = "",
+     .help = "run some opcodes in stuff mode"},
     COMMAND_REGISTRATION_DONE};
 
 const struct command_registration ppc476fp_command_handlers[] = {
