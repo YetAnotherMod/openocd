@@ -97,6 +97,14 @@ enum MSR_bits{
     MSR_FP_MASK = BIT(63 - 50),
     MSR_DS_MASK = BIT(63 - 59),
 };
+
+enum DCDBTRH{
+    DCDBTRH_ADDR_MASK = 0xffffe000,
+    DCDBTRH_VALID_MASK = 0x1000,
+    DCDBTRH_TAGP_MASK = 0xffffe000,
+    DCDBTRH_EXTADDR_MASK = 0x3ff,
+};
+
 static const uint32_t MMUCR_STID_MASK = (0xFFFF << 0);
 
 #define ALL_REG_COUNT 71

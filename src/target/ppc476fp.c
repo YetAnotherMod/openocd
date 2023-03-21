@@ -4326,6 +4326,125 @@ COMMAND_HANDLER(ppc476fp_code_icread_command) {
     return flush_registers(target);
 }
 
+COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    struct target *target = get_current_target(CMD_CTX);
+    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+    ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
+    command_print(
+        CMD,
+        "ST:W ERA:ADDR     +00      +04      +08      +0c      +10      +14      +18      +1c");
+    for ( uint32_t set = 0; set < 256 ; ++set ){
+        for ( uint32_t way = 0 ; way < 4 ; ++way ){
+            uint32_t dcdbtrh;
+            for ( uint32_t i = 0 ; i < 8 ; ++i ){
+                int ret = write_gpr_reg(target, tmp_reg_addr, way * 0x2000 + set * 0x20 + i * 4);
+                if ( ret != ERROR_OK ){
+                    LOG_ERROR("Can't write addr to tmp reg");
+                    return ret;
+                }
+
+                ret = stuff_code(target, 0x7c00028c | (tmp_reg_data << 21) | (tmp_reg_addr << 11) );
+                if ( ret != ERROR_OK ){
+                    LOG_ERROR("Can't run dcread R%i, R0, R%i", tmp_reg_data, tmp_reg_addr);
+                    return ret;
+                }
+                uint32_t data;
+                ret = read_gpr_reg(target,tmp_reg_data,(uint8_t*)&data);
+                if ( ret != ERROR_OK ){
+                    LOG_ERROR("Can't read data register");
+                    return ret;
+                }
+
+                if ( i == 0 ) {
+
+                    ret = read_spr_reg(target,925,(uint8_t*)&dcdbtrh);
+                    if ( ret != ERROR_OK ){
+                        LOG_ERROR("Can't read dcdbtrh");
+                        return ret;
+                    }
+
+                    if ( ( dcdbtrh & DCDBTRH_VALID_MASK ) == 0 ){
+                        break;
+                    }
+                    command_print_sameline(CMD, "%02x:%i:%03x:%08x", set,way,dcdbtrh&DCDBTRH_EXTADDR_MASK, dcdbtrh&DCDBTRH_ADDR_MASK);
+
+                }
+                command_print_sameline(CMD, " %08x", data);
+
+            }
+
+            if ( ( dcdbtrh & DCDBTRH_VALID_MASK ) != 0 ){
+                command_print(CMD," ");
+            }
+            
+
+        }
+    }
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    struct target *target = get_current_target(CMD_CTX);
+    command_print(
+        CMD,
+        "ST:W ERA:ADDR     +00      +04      +08      +0c      +10      +14      +18      +1c");
+    for ( uint32_t set = 0; set < 256 ; ++set ){
+        for ( uint32_t way = 0 ; way < 4 ; ++way ){
+            uint32_t icdbtrh;
+            for ( uint32_t i = 0 ; i < 8 ; ++i ){
+                int ret = write_gpr_reg(target, tmp_reg_addr, way * 0x2000 + set * 0x20 + i*4);
+                if ( ret != ERROR_OK ){
+                    LOG_ERROR("Can't write addr to tmp reg");
+                    return ret;
+                }
+
+                ret = stuff_code(target, 0x7c0007cc | (tmp_reg_addr << 11) );
+                if ( ret != ERROR_OK ){
+                    LOG_ERROR("Can't run icread R0, R%i", tmp_reg_addr);
+                    return ret;
+                }
+
+                if ( i == 0 ) {
+
+                    ret = read_spr_reg(target,927,(uint8_t*)&icdbtrh);
+                    if ( ret != ERROR_OK ){
+                        LOG_ERROR("Can't read icdbtrh");
+                        return ret;
+                    }
+
+                    if ( ( icdbtrh & DCDBTRH_VALID_MASK ) == 0 ){
+                        break;
+                    }
+                    command_print_sameline(CMD, "%02x:%i:%03x:%08x", set,way,icdbtrh&DCDBTRH_EXTADDR_MASK, icdbtrh&DCDBTRH_ADDR_MASK);
+
+                }
+                uint32_t data;
+                ret = read_spr_reg(target,979,(uint8_t*)&data);
+                if ( ret != ERROR_OK ){
+                    LOG_ERROR("Can't read icdbdr0");
+                    return ret;
+                }
+
+                command_print_sameline(CMD, " %08x", data);
+
+            }
+
+            if ( ( icdbtrh & DCDBTRH_VALID_MASK ) != 0 ){
+                command_print(CMD," ");
+            }
+            
+
+        }
+    }
+    return flush_registers(target);
+}
+
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
     {{.name = "all",
       .handler = ppc476fp_handle_tlb_drop_all_command,
@@ -4546,6 +4665,19 @@ static const struct command_registration ppc476fp_code_exec_command_handlers[] =
     .help = "Instruction Cache Read"},
     COMMAND_REGISTRATION_DONE};
 
+static const struct command_registration ppc476fp_cache_exec_command_handlers[] = {
+    {.name = "l1d",
+    .handler = ppc476fp_cache_l1d_command,
+    .mode = COMMAND_EXEC,
+    .usage = "",
+    .help = "Dump valid l1d entryes"},
+    {.name = "l1i",
+    .handler = ppc476fp_cache_l1i_command,
+    .mode = COMMAND_EXEC,
+    .usage = "",
+    .help = "Dump valid l1i entryes"},
+    COMMAND_REGISTRATION_DONE};
+
 static const struct command_registration ppc476fp_exec_command_handlers[] = {
     {.name = "tlb",
      .handler = ppc476fp_handle_tlb_dump_command,
@@ -4594,6 +4726,11 @@ static const struct command_registration ppc476fp_exec_command_handlers[] = {
      .mode = COMMAND_EXEC,
      .usage = "",
      .help = "run some opcodes in stuff mode"},
+    {.name = "cache",
+     .chain = ppc476fp_cache_exec_command_handlers,
+     .mode = COMMAND_EXEC,
+     .usage = "",
+     .help = "dump valid cache"},
     COMMAND_REGISTRATION_DONE};
 
 const struct command_registration ppc476fp_command_handlers[] = {
