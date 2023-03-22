@@ -2822,6 +2822,8 @@ static int ppc476fp_halt(struct target *target) {
     if ( ret == ERROR_OK ){
         save_state_and_init_debug(target);
         target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+    }else{
+        LOG_ERROR("Can't stop CPU, need reset");
     }
     return ret;
 }
