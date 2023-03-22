@@ -4335,7 +4335,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
     ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
     command_print(
         CMD,
-        "ST:W ERA:ADDR     +00      +04      +08      +0c      +10      +14      +18      +1c");
+        "SET:W ERA:ADDR     +00      +04      +08      +0c      +10      +14      +18      +1c");
     for ( uint32_t set = 0; set < 256 ; ++set ){
         for ( uint32_t way = 0 ; way < 4 ; ++way ){
             uint32_t dcdbtrh;
@@ -4369,7 +4369,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
                     if ( ( dcdbtrh & DCDBTRH_VALID_MASK ) == 0 ){
                         break;
                     }
-                    command_print_sameline(CMD, "%02x:%i:%03x:%08x", set,way,dcdbtrh&DCDBTRH_EXTADDR_MASK, dcdbtrh&DCDBTRH_ADDR_MASK);
+                    command_print_sameline(CMD, " %02x:%i %03x:%08x", set,way,dcdbtrh&DCDBTRH_EXTADDR_MASK, (dcdbtrh&DCDBTRH_ADDR_MASK)|(set<<5));
 
                 }
                 command_print_sameline(CMD, " %08x", data);
@@ -4393,7 +4393,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
     struct target *target = get_current_target(CMD_CTX);
     command_print(
         CMD,
-        "ST:W ERA:ADDR     +00      +04      +08      +0c      +10      +14      +18      +1c");
+        "SET:W ERA:ADDR     +00      +04      +08      +0c      +10      +14      +18      +1c");
     for ( uint32_t set = 0; set < 256 ; ++set ){
         for ( uint32_t way = 0 ; way < 4 ; ++way ){
             uint32_t icdbtrh;
@@ -4421,7 +4421,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
                     if ( ( icdbtrh & DCDBTRH_VALID_MASK ) == 0 ){
                         break;
                     }
-                    command_print_sameline(CMD, "%02x:%i:%03x:%08x", set,way,icdbtrh&DCDBTRH_EXTADDR_MASK, icdbtrh&DCDBTRH_ADDR_MASK);
+                    command_print_sameline(CMD, " %02x:%i %03x:%08x", set,way,icdbtrh&DCDBTRH_EXTADDR_MASK, (icdbtrh&DCDBTRH_ADDR_MASK)|(set<<5));
 
                 }
                 uint32_t data;
