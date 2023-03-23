@@ -69,6 +69,14 @@ static int jdsr_log_ser(uint32_t JDSR){
         LOG_ERROR("Instruction-side machine check");
         ret = ERROR_TARGET_TRANSLATION_FAULT;
     }
+    if (JDSR & JDSR_SFP_MASK){
+        LOG_ERROR("Stuff pending. Possibly the processor is frozen. Try reset");
+        ret = ERROR_TARGET_FAILURE;
+    }
+    if (JDSR & JDSR_ISO_MASK){
+        LOG_ERROR("Instruction stuff overrun. Processor must have frozen. Try reset");
+        ret = ERROR_TARGET_FAILURE;
+    }
     return ret;
 }
 
@@ -177,9 +185,10 @@ static int jtag_read_write_register(struct target *target,
     
     if ( (tap_alive1 == 1) && (!valid_bit || (tap_alive2 == 1)) ){
         return ERROR_OK;
+    }else{
+        target->state = TARGET_UNKNOWN;
+        return ERROR_JTAG_DEVICE_ERROR;
     }
-    
-    return ERROR_JTAG_DEVICE_ERROR;
 }
 
 // чтение JTAG-регистра DBDR. Это единственный способ получить ответные данные
@@ -210,20 +219,35 @@ static int write_JDCR(struct target *target, uint32_t data) {
         return ret;
     }
 
-    return jdsr_log_ser(JDSR);
+    ret = jdsr_log_ser(JDSR);
+    if ( ret == ERROR_TARGET_FAILURE ){
+        target->state = TARGET_UNKNOWN;
+    }
+    return ret;
 }
 
 // запись JTAG-регистра JISB. Регистр доступен только для записи. Запись в этот
 // регистр напрямую вставляет код инструкции в конвеер и исполняет её.
 static int stuff_code(struct target *target, uint32_t code) {
     uint32_t JDSR = 0;
+    if ( target->state != TARGET_HALTED ){
+        return ERROR_TARGET_NOT_HALTED;
+    }
     int ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR,
                                     true, code, (uint8_t *)&JDSR);
-    if (ret != ERROR_OK){
-        return ret;
+    for ( int i = 100 ; (i > 0) && (JDSR&JDSR_SFP_MASK) ; --i ){
+        ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR,
+                                        false, code, (uint8_t *)&JDSR);
+        if (ret != ERROR_OK){
+            return ret;
+        }
     }
 
-    return jdsr_log_ser(JDSR);
+    ret = jdsr_log_ser(JDSR);
+    if ( ret == ERROR_TARGET_FAILURE ){
+        target->state = TARGET_UNKNOWN;
+    }
+    return ret;
 }
 
 // чтение РОН через JTAG. Значение РОН при этом не меняется, но обычно
