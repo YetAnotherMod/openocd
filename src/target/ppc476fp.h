@@ -253,8 +253,10 @@ struct ppc476fp_common {
     uint32_t DAC_value[WP_NUMBER];
     struct tlb_cached_record tlb_cache[TLB_NUMBER];
     bool use_fpu;
-    bool use_stack;
+    enum target_endianness use_stack;
     uint32_t use_static_mem;
+    enum target_endianness use_static_mem_endianness;
+    bool memory_checked;
 };
 
 struct ppc476fp_tap_ext {
@@ -313,12 +315,6 @@ static inline struct ppc476fp_common *target_to_ppc476fp(struct target *target);
 static inline struct ppc476fp_tap_ext *
 target_to_ppc476fp_tap_ext(struct target *target);
 
-/// @brief Копирование из src в dst с обратным порядком байт
-/// @param[out] dst указатель на целевой буфер
-/// @param[in] src указатель на исходный буфер
-/// @param[in] len количество байт для копирования
-static void memcpy_swapped(void *dst, const void *src, size_t len);
-
 /**
  * @brief Анализ JDSR
  * @param[in] JDSR Значение JDSR
@@ -368,6 +364,13 @@ static int use_fpu_off(struct target *target, enum reg_action action);
 /// @return false - не активен
 static bool use_stack_get(struct target *target);
 
+/**
+ * @brief Считать ендианность области стека
+ * @param[in] target Указатель на объект target
+ * @return тип ендианности
+*/
+static enum target_endianness use_stack_endianness(struct target *target);
+
 /// @brief Включить use_stack
 /// @param[in] target Указатель на объект target
 /// @return ERROR_OK - успешно, иначе - ошибка
@@ -395,6 +398,13 @@ static int use_stack_off(struct target *target, enum reg_action action);
 /// @return true - активен
 /// @return false - не активен
 static bool use_static_mem_get(struct target *target);
+
+/**
+ * @brief Считать ендианность области стека
+ * @param[in] target Указатель на объект target
+ * @return тип ендианности
+*/
+static enum target_endianness use_static_mem_endianness(struct target *target);
 
 /**
  * @brief Получить адрес разрешённого участка статической памяти
@@ -662,13 +672,32 @@ static int write_at_stack(struct target *target, int16_t shift,
 /**
  * @brief Проверка работоспособности области стека
  *
- * Выполняет 2 записи эталонов по 4 байта в незанятой области стека,
- * после чего считывает и сверяет с эталоном
+ * Выполняет 2 записи эталонов по 4 байта в незанятой области стека
+ * (всего 8 байт), после чего считывает и сверяет с эталоном. После
+ * этого считывает ещё один байт для определения ендианности области
+ * памяти.
  *
  * @param[in] target Указатель на объект target
+ * @param[out] endianness Определение порядка байт в области стека
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
-static int test_memory_at_stack(struct target *target);
+static int test_memory_at_stack(struct target *target, enum target_endianness *endianness);
+/**
+ * @brief Проверяет работоспособности произвольного адреса памяти
+ *
+ * Выполняет 2 записи эталонов по 4 байта по указанному адресу,
+ * (всего 8 байт), после чего считывает и сверяет с эталоном. После
+ * этого считывает ещё один байт для определения ендианности области
+ * памяти.
+ *
+ * @warning Адрес должен быть выровнен на 8
+ *
+ * @param[in] target Указатель на объект target
+ * @param[in] addr Тестируемый адрес в памяти
+ * @param[out] endianness Определение порядка байт в области стека
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ */
+static int test_memory_at_addr(struct target *target, uint32_t addr, enum target_endianness *endianness);
 
 /**
  * @brief Чтение памяти, по эффективному адресу

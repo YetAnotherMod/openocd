@@ -235,6 +235,9 @@ static int stuff_code(struct target *target, uint32_t code) {
     }
     int ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR,
                                     true, code, (uint8_t *)&JDSR);
+    if (ret != ERROR_OK){
+        return ret;
+    }
     for ( int i = 100 ; (i > 0) && (JDSR&JDSR_SFP_MASK) ; --i ){
         ret = jtag_read_write_register(target, JTAG_INSTR_WRITE_JISB_READ_JDSR,
                                         false, code, (uint8_t *)&JDSR);
@@ -397,15 +400,26 @@ static int read_at_stack(struct target *target, int16_t shift,
 // корректности значения в r1, после чего в свободную часть пытаются записать 8
 // байт (2 слова), после чего считать и сравнить с эталоном. если чтение
 // удалось, стек считается рабочим
-static int test_memory_at_stack(struct target *target) {
+static int test_memory_at_stack(struct target *target, enum target_endianness *endianness) {
+    return test_memory_at_addr(target, get_reg_value_32(target_to_ppc476fp(target)->gpr_regs[1])-8, endianness);
+}
+static int test_memory_at_addr(struct target *target, uint32_t addr, enum target_endianness *endianness) {
 
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t value_1;
     uint32_t value_2;
+    uint8_t endian;
     int ret;
+    enum MAGIC_WORDS{
+        MAGIC_WORD_1 = 0x396F965C,
+        MAGIC_WORD_2 = 0x44692D7E
+    };
 
-    static const uint32_t magic1 = 0x396F965C;
-    static const uint32_t magic2 = 0x44692D7E;
+    uint32_t magic1;
+    uint32_t magic2;
+
+     h_u32_to_be((uint8_t *)&magic1, MAGIC_WORD_1);
+     h_u32_to_be((uint8_t *)&magic2, MAGIC_WORD_2);
 
     if (target->state != TARGET_HALTED) {
         return ERROR_TARGET_NOT_HALTED;
@@ -416,25 +430,33 @@ static int test_memory_at_stack(struct target *target) {
     if ((sp < 8) || ((sp & 0x3) != 0)) // check the stack pointer
         return ERROR_MEMORY_AT_STACK;
 
-    ret = write_at_stack(target, -8, 4, (const uint8_t *)&magic1);
+    ret = write_virt_mem(target, addr+0, 4, (uint8_t *)&magic1);
     if (ret != ERROR_OK)
         return ret;
-    ret = write_at_stack(target, -4, 4, (const uint8_t *)&magic2);
+    ret = write_virt_mem(target, addr+4, 4, (uint8_t *)&magic2);
     if (ret != ERROR_OK)
         return ret;
 
     ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
 
-    ret = read_at_stack(target, -8, 4, (uint8_t *)&value_1);
+    ret = read_virt_mem(target, addr+0, 4, (uint8_t *)&value_1);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_at_stack(target, -4, 4, (uint8_t *)&value_2);
+    ret = read_virt_mem(target, addr+4, 4, (uint8_t *)&value_2);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = read_virt_mem(target, addr, 1, &endian);
     if (ret != ERROR_OK)
         return ret;
 
     // check the magic values
     if ((value_1 != magic1) || (value_2 != magic2))
         return ERROR_MEMORY_AT_STACK;
+    if (endian == (MAGIC_WORD_1 & 0xff)){
+        *endianness = TARGET_LITTLE_ENDIAN;
+    }else if (endian == (MAGIC_WORD_1>>24)){
+        *endianness = TARGET_BIG_ENDIAN;
+    }
 
     return ERROR_OK;
 }
@@ -570,15 +592,6 @@ static int write_spr_reg(struct target *target, int spr_num, uint32_t data) {
     return ERROR_OK;
 }
 
-static void memcpy_swapped(void *dst, const void *src, size_t len) {
-    uint8_t *dst_ = dst;
-    const uint8_t *src_ = src;
-    src_ += len;
-    while (len--) {
-        *(dst_++) = *(--src_);
-    }
-}
-
 // чтение регистра fpu. Здесь много заковырок. Во-первых, fpu должен быть
 // включен. Во-вторых, регистры fpu нельзя напрямую передать в JTAG или хотябы
 // РОН, потому обращение к ним происходит через стек, потому он тоже должен
@@ -606,31 +619,46 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
         ret = stuff_code(target, code);
         if (ret != ERROR_OK)
             return ret;
-        ret =
-            read_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = read_virt_mem(target, use_static_mem_addr(target) + 4, 4,
-                            value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
-        memcpy_swapped(value, value_m, 8);
+        if ( use_static_mem_endianness(target) == TARGET_BIG_ENDIAN ){
+            ret = read_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = read_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }else{
+            ret = read_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = read_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }
     } else if (use_stack_get(target)) {
         code = 0xd801fff8 | (reg_num << 21); // stfd Fx, -8(sp)
         ret = stuff_code(target, code);
         if (ret != ERROR_OK)
             return ret;
-        ret = read_at_stack(target, -8, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = read_at_stack(target, -4, 4, value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
-        memcpy_swapped(value, value_m, 8);
+        if ( use_stack_endianness(target) == TARGET_BIG_ENDIAN ){
+            ret = read_at_stack(target, -8, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = read_at_stack(target, -4, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }else{
+            ret = read_at_stack(target, -4, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = read_at_stack(target, -8, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }
     } else {
         *value = bad;
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
+    *value = be_to_h_u64(value_m);
     return ERROR_OK;
 }
 
@@ -640,7 +668,7 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
 // работать.
 static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
     uint8_t value_m[8];
-    memcpy_swapped(value_m, &value, 8);
+    h_u64_to_be (value_m,value);
     int ret;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t code;
@@ -650,15 +678,24 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     if (use_static_mem_get(target)) {
+
         ppc476fp->fpr_regs[reg_num]->dirty = true;
-        ret =
-            write_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = write_virt_mem(target, use_static_mem_addr(target) + 4, 4,
-                             value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
+
+        if ( use_static_mem_endianness(target) == TARGET_BIG_ENDIAN ){
+            ret = write_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = write_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }else{
+            ret = write_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = write_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }
 
         write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
         code = 0xc8000000 | (reg_num << 21) |
@@ -670,12 +707,22 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
     } else if (use_stack_get(target)) {
 
         ppc476fp->fpr_regs[reg_num]->dirty = true;
-        ret = write_at_stack(target, -8, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = write_at_stack(target, -4, 4, value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
+
+        if ( use_stack_endianness(target) == TARGET_BIG_ENDIAN ){
+            ret = write_at_stack(target, -8, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = write_at_stack(target, -4, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }else{
+            ret = write_at_stack(target, -4, 4, value_m);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = write_at_stack(target, -8, 4, value_m + 4);
+            if (ret != ERROR_OK)
+                return ret;
+        }
 
         code = 0xc801fff8 | (reg_num << 21); // lfd Fx, -8(sp)
         ret = stuff_code(target, code);
@@ -955,6 +1002,18 @@ static int write_dirty_fpu_regs(struct target *target) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
+    if ( !ppc476fp->memory_checked ){
+
+        if (use_stack_get(target)) {
+            use_stack_on(target);
+        }
+
+        if (use_static_mem_get(target)) {
+            use_static_mem_on(target, use_static_mem_addr(target));
+        }
+        ppc476fp->memory_checked = true;
+    }
+
     if (ppc476fp->FPSCR_reg->dirty) {
         uint64_t value = (uint64_t)get_reg_value_32(ppc476fp->FPSCR_reg);
         ret = write_fpr_reg(target, 0, value);
@@ -993,6 +1052,19 @@ static int read_required_fpu_regs(struct target *target) {
     if (target->state != TARGET_HALTED) {
         return ERROR_TARGET_NOT_HALTED;
     }
+
+    if ( !ppc476fp->memory_checked ){
+
+        if (use_stack_get(target)) {
+            use_stack_on(target);
+        }
+
+        if (use_static_mem_get(target)) {
+            use_static_mem_on(target, use_static_mem_addr(target));
+        }
+        ppc476fp->memory_checked = true;
+    }
+
 
     for (i = 0; i < FPR_REG_COUNT; ++i) {
         reg = ppc476fp->fpr_regs[i];
@@ -1281,8 +1353,9 @@ static void build_reg_caches(struct target *target) {
 
     target->reg_cache = gen_cache;
     ppc476fp->use_fpu = false;
-    ppc476fp->use_stack = false;
+    ppc476fp->use_stack = TARGET_ENDIAN_UNKNOWN;
     ppc476fp->use_static_mem = 0xffffffff;
+    ppc476fp->use_static_mem_endianness = TARGET_ENDIAN_UNKNOWN;
 }
 
 // установка аппаратной точки останова (предполагается, что она создана ранее)
@@ -1612,9 +1685,7 @@ static int save_state(struct target *target) {
     if (ret != ERROR_OK)
         return ret;
 
-    if (use_stack_get(target)) {
-        use_stack_on(target);
-    }
+    target_to_ppc476fp(target)->memory_checked = false;
 
     ret = read_required_fpu_regs(target);
     if (ret != ERROR_OK)
@@ -1973,6 +2044,9 @@ static int write_tlb(struct target *target, int index_way,
     ret = write_gpr_reg(target, tmp_reg_addr, data0);
     if (ret != ERROR_OK)
         return ret;
+    
+    target_to_ppc476fp(target)->memory_checked = false;
+
     ret =
         stuff_code(target, 0x7c0007a4 | (tmp_reg_addr << 21) |
                                (tmp_reg_data
@@ -3445,22 +3519,29 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
 }
 
 static bool use_stack_get(struct target *target) {
+    return target_to_ppc476fp(target)->use_stack != TARGET_ENDIAN_UNKNOWN;
+}
+
+static enum target_endianness use_stack_endianness(struct target *target) {
     return target_to_ppc476fp(target)->use_stack;
 }
 
 static int use_stack_on(struct target *target) {
     int ret = ERROR_OK;
+    enum target_endianness endianness = TARGET_ENDIAN_UNKNOWN;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     if (target->state == TARGET_HALTED) {
-        ret = test_memory_at_stack(target);
+        ret = test_memory_at_stack(target, &endianness);
         if (ret != ERROR_OK) {
             LOG_ERROR("test_memory_at_stack failed, disable use_stack");
             use_stack_off(target, reg_action_ignore);
             return ret;
         }
+        ppc476fp->use_stack = endianness;
         flush_registers(target);
+    }else{
+        ppc476fp->use_stack = TARGET_BIG_ENDIAN;
     }
-    ppc476fp->use_stack = true;
     return ERROR_OK;
 }
 
@@ -3484,6 +3565,10 @@ static bool use_static_mem_get(struct target *target) {
     return target_to_ppc476fp(target)->use_static_mem != 0xffffffff;
 }
 
+static enum target_endianness use_static_mem_endianness(struct target *target){
+    return target_to_ppc476fp(target)->use_static_mem_endianness;
+}
+
 static uint32_t use_static_mem_addr(struct target *target) {
     return target_to_ppc476fp(target)->use_static_mem;
 }
@@ -3493,7 +3578,22 @@ static int use_static_mem_on(struct target *target, uint32_t base_addr) {
         LOG_ERROR("addr must be aligned by 8");
         return ERROR_FAIL;
     }
-    target_to_ppc476fp(target)->use_static_mem = base_addr;
+    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+    if (target->state == TARGET_HALTED) {
+        enum target_endianness endianness = TARGET_ENDIAN_UNKNOWN;
+        int ret = test_memory_at_addr(target, base_addr, &endianness);
+        if (ret != ERROR_OK) {
+            LOG_ERROR("test_memory_at_addr failed, disable use_stack");
+            use_static_mem_off(target, reg_action_ignore);
+            return ret;
+        }
+        target_to_ppc476fp(target)->use_static_mem = base_addr;
+        ppc476fp->use_static_mem_endianness = endianness;
+        flush_registers(target);
+    }else{
+        target_to_ppc476fp(target)->use_static_mem = base_addr;
+        ppc476fp->use_static_mem_endianness = TARGET_ENDIAN_UNKNOWN;
+    }
     return ERROR_OK;
 }
 
