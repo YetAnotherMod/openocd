@@ -2,7 +2,10 @@
 #include "config.h"
 #endif
 
+#include "ppc476fp_stuffs.h"
+
 #include "ppc476fp.h"
+
 #include <helper/log.h>
 
 static int flush_registers(struct target* target){
@@ -256,8 +259,7 @@ static int stuff_code(struct target *target, uint32_t code) {
 // чтение РОН через JTAG. Значение РОН при этом не меняется, но обычно
 // происходит после инструкций, изменяющих значене регистра
 static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data) {
-    uint32_t code = 0x7C13FBA6 | (reg_num << 21); // mtdbdr Rx
-    int ret = stuff_code(target, code);
+    int ret = stuff_code(target, mtspr(SPR_REG_NUM_DBDR,reg_num));
     if (ret != ERROR_OK)
         return ret;
 
@@ -269,23 +271,18 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data) {
 // автоматически помечает регистр как dirty для того, чтобы заменить его
 // значение на эталонное при снятии halt
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data) {
-    uint32_t code;
     int32_t data_signed = data;
     int ret = ERROR_OK;
     if ((data_signed < -32768) || (data_signed >= 32768)) {
-        code = 0x3c000000 | (reg_num << 21) | (data >> 16);
-        ret = stuff_code(target, code);
+        ret = stuff_code(target, lis(reg_num, data>>16));
         if (ret != ERROR_OK) {
             return ret;
         }
-        if (data & 0xffff) {
-            code = 0x60000000 | (reg_num << 21) | (reg_num << 16) |
-                   (data & 0xffff);
-            ret = stuff_code(target, code);
+        if (data & 0xffffu) {
+            ret = stuff_code(target, ori(reg_num,reg_num,data&0xffffu));
         }
     } else {
-        code = 0x38000000 | (reg_num << 21) | (data & 0xffff);
-        ret = stuff_code(target, code);
+        ret = stuff_code(target, li(reg_num,data_signed));
     }
     target_to_ppc476fp(target)->gpr_regs[reg_num]->dirty = true;
 
@@ -297,9 +294,6 @@ static int write_gpr_reg(struct target *target, int reg_num, uint32_t data) {
 // восстанавливает из эталона
 static int write_at_stack(struct target *target, int16_t shift,
                           enum memory_access_size size, const uint8_t *buffer) {
-    uint32_t code;
-    uint32_t value;
-    uint32_t i;
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
@@ -307,47 +301,18 @@ static int write_at_stack(struct target *target, int16_t shift,
     }
 
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    if (ppc476fp->gpr_regs[1]->dirty) {
-        write_gpr_reg(target, 1, get_reg_value_32(ppc476fp->gpr_regs[1]));
-        ppc476fp->gpr_regs[1]->dirty = false;
+    if (ppc476fp->gpr_regs[reg_sp]->dirty) {
+        write_gpr_reg(target, reg_sp, get_reg_value_32(ppc476fp->gpr_regs[reg_sp]));
+        ppc476fp->gpr_regs[reg_sp]->dirty = false;
     }
 
-    switch (size) {
-    case memory_access_size_byte:
-        code = 0x98010000 | (tmp_reg_data << 21) |
-               ((uint32_t)(uint16_t)shift); // stb %tmp_reg_data, 0(%sp)
-        break;
-    case memory_access_size_half_word:
-        code = 0xB0010000 | (tmp_reg_data << 21) |
-               ((uint32_t)(uint16_t)shift); // sth %tmp_reg_data, 0(%sp)
-        break;
-    case memory_access_size_word:
-        code = 0x90010000 | (tmp_reg_data << 21) |
-               ((uint32_t)(uint16_t)shift); // stw %tmp_reg_data, 0(%sp)
-        break;
-    default:
-        assert(false);
-    }
-
-    value = 0;
-    for (i = 0; i < size; ++i) {
-        value <<= 8;
-        value |= (uint32_t) * (buffer++);
-    }
-
-    write_gpr_reg(target, tmp_reg_data, value);
-    return stuff_code(target, code);
+    return write_virt_mem_raw(target,tmp_reg_data,reg_sp, shift,size, buffer);
 }
 
 // чтение значения из области рядом с указателем стека
 // проверяет чистоту r1, при необходимости восстанавливает из эталона
 static int read_at_stack(struct target *target, int16_t shift,
                          enum memory_access_size size, uint8_t *buffer) {
-    uint32_t code;
-    uint32_t ishift;
-    uint32_t value;
-    uint32_t i;
-    int ret;
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
@@ -355,45 +320,12 @@ static int read_at_stack(struct target *target, int16_t shift,
     }
 
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    if (ppc476fp->gpr_regs[1]->dirty) {
-        write_gpr_reg(target, 1, get_reg_value_32(ppc476fp->gpr_regs[1]));
-        ppc476fp->gpr_regs[1]->dirty = false;
+    if (ppc476fp->gpr_regs[reg_sp]->dirty) {
+        write_gpr_reg(target, reg_sp, get_reg_value_32(ppc476fp->gpr_regs[reg_sp]));
+        ppc476fp->gpr_regs[reg_sp]->dirty = false;
     }
 
-    switch (size) {
-    case memory_access_size_byte:
-        code = 0x88010000 | (tmp_reg_data << 21) |
-               ((uint32_t)(uint16_t)shift); // lbz %tmp_reg_data, 0(%sp)
-        ishift = 24;
-        break;
-    case memory_access_size_half_word:
-        code = 0xA0010000 | (tmp_reg_data << 21) |
-               ((uint32_t)(uint16_t)shift); // lhz %tmp_reg_data, 0(%sp)
-        ishift = 16;
-        break;
-    case memory_access_size_word:
-        code = 0x80010000 | (tmp_reg_data << 21) |
-               ((uint32_t)(uint16_t)shift); // lwz %tmp_reg_data, 0(%sp)
-        ishift = 0;
-        break;
-    default:
-        assert(false);
-    }
-    ret = stuff_code(target, code);
-    if (ret != ERROR_OK)
-        return ret;
-    target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
-    ret = read_gpr_reg(target, tmp_reg_data, (uint8_t *)&value);
-    if (ret != ERROR_OK)
-        return ret;
-
-    value <<= ishift;
-    for (i = 0; i < size; ++i) {
-        *(buffer++) = (value >> 24);
-        value <<= 8;
-    }
-
-    return ERROR_OK;
+    return read_virt_mem_raw(target, tmp_reg_data, reg_sp, shift, size, buffer);
 }
 
 // проверка доступности области стека. Происходит по принципу: проверка
@@ -401,11 +333,9 @@ static int read_at_stack(struct target *target, int16_t shift,
 // байт (2 слова), после чего считать и сравнить с эталоном. если чтение
 // удалось, стек считается рабочим
 static int test_memory_at_stack(struct target *target, enum target_endianness *endianness) {
-    return test_memory_at_addr(target, get_reg_value_32(target_to_ppc476fp(target)->gpr_regs[1])-8, endianness);
+    return test_memory_at_addr(target, get_reg_value_32(target_to_ppc476fp(target)->gpr_regs[reg_sp])-8, endianness);
 }
 static int test_memory_at_addr(struct target *target, uint32_t addr, enum target_endianness *endianness) {
-
-    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t value_1;
     uint32_t value_2;
     uint8_t endian;
@@ -425,9 +355,7 @@ static int test_memory_at_addr(struct target *target, uint32_t addr, enum target
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    uint32_t sp = get_reg_value_32(ppc476fp->gpr_regs[1]);
-
-    if ((sp < 8) || ((sp & 0x3) != 0)) // check the stack pointer
+    if ((addr < 8) || ((addr & 0x3) != 0)) // check the stack pointer
         return ERROR_MEMORY_AT_STACK;
 
     ret = write_virt_mem(target, addr+0, 4, (uint8_t *)&magic1);
@@ -436,8 +364,6 @@ static int test_memory_at_addr(struct target *target, uint32_t addr, enum target
     ret = write_virt_mem(target, addr+4, 4, (uint8_t *)&magic2);
     if (ret != ERROR_OK)
         return ret;
-
-    ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
 
     ret = read_virt_mem(target, addr+0, 4, (uint8_t *)&value_1);
     if (ret != ERROR_OK)
@@ -462,12 +388,9 @@ static int test_memory_at_addr(struct target *target, uint32_t addr, enum target
 }
 
 // Запись значения по эффективному адресу
-static int write_virt_mem(struct target *target, uint32_t address,
-                          enum memory_access_size size, const uint8_t *buffer) {
+static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, const uint8_t *buffer) {
     uint32_t code;
     uint32_t value;
-    uint32_t i;
-    int ret;
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
@@ -476,42 +399,46 @@ static int write_virt_mem(struct target *target, uint32_t address,
 
     switch (size) {
     case memory_access_size_byte:
-        code = 0x98000000 | (tmp_reg_data << 21) |
-               (tmp_reg_addr << 16); // stb %tmp_reg_data, 0(%tmp_reg_addr)
+        code = stb(rt,ra,d);
         break;
     case memory_access_size_half_word:
-        code = 0xB0000000 | (tmp_reg_data << 21) |
-               (tmp_reg_addr << 16); // sth %tmp_reg_data, 0(%tmp_reg_addr)
+        code = sth(rt,ra,d);
         break;
     case memory_access_size_word:
-        code = 0x90000000 | (tmp_reg_data << 21) |
-               (tmp_reg_addr << 16); // stw %tmp_reg_data, 0(%tmp_reg_addr)
+        code = stw(rt,ra,d);
         break;
     default:
         assert(false);
     }
 
-    ret = write_gpr_reg(target, tmp_reg_addr, address);
-    if (ret != ERROR_OK) {
-        return ret;
+    if (buffer != NULL){
+        value = 0;
+        for (unsigned int i = 0; i < size; ++i) {
+            value <<= 8;
+            value |= (uint32_t) * (buffer++);
+        }
+
+        int ret = write_gpr_reg(target, rt, value);
+        if (ret != ERROR_OK) {
+            return ret;
+        }
     }
 
-    value = 0;
-    for (i = 0; i < size; ++i) {
-        value <<= 8;
-        value |= (uint32_t) * (buffer++);
-    }
-
-    ret = write_gpr_reg(target, tmp_reg_data, value);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
     return stuff_code(target, code);
 }
 
+static int write_virt_mem(struct target *target, uint32_t address,
+                          enum memory_access_size size, const uint8_t *buffer) {
+    int ret = write_gpr_reg(target, tmp_reg_addr, address);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
+
+    return write_virt_mem_raw(target,tmp_reg_data,tmp_reg_addr,0,size, buffer);
+}
+
 // Чтение значения с эффективного адреса
-static int read_virt_mem(struct target *target, uint32_t address,
-                         enum memory_access_size size, uint8_t *buffer) {
+static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, uint8_t *buffer) {
     uint32_t code;
     uint32_t shift;
     uint32_t value;
@@ -525,51 +452,61 @@ static int read_virt_mem(struct target *target, uint32_t address,
 
     switch (size) {
     case memory_access_size_byte:
-        code = 0x88000000 | (tmp_reg_data << 21) |
-               (tmp_reg_addr << 16); // lbz %tmp_reg_data, 0(%tmp_reg_addr)
+        code = lbz(rt,ra,d);
         shift = 24;
         break;
     case memory_access_size_half_word:
-        code = 0xA0000000 | (tmp_reg_data << 21) |
-               (tmp_reg_addr << 16); // lhz %tmp_reg_data, 0(%tmp_reg_addr)
+        code = lhz(rt,ra,d);
         shift = 16;
         break;
     case memory_access_size_word:
-        code = 0x80000000 | (tmp_reg_data << 21) |
-               (tmp_reg_addr << 16); // lwz %tmp_reg_data, 0(%tmp_reg_addr)
+        code = lwz(rt,ra,d);
         shift = 0;
         break;
     default:
         assert(false);
     }
+    target_to_ppc476fp(target)->gpr_regs[rt]->dirty = true;
 
-    ret = write_gpr_reg(target, tmp_reg_addr, address);
-    if (ret != ERROR_OK)
-        return ret;
     ret = stuff_code(target, code);
     if (ret != ERROR_OK)
         return ret;
-    target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
-    ret = read_gpr_reg(target, tmp_reg_data, (uint8_t *)&value);
-    if (ret != ERROR_OK)
-        return ret;
 
-    value <<= shift;
-    for (i = 0; i < size; ++i) {
-        *(buffer++) = (value >> 24);
-        value <<= 8;
+    if ( buffer != NULL ){
+        ret = read_gpr_reg(target, rt, (uint8_t *)&value);
+        if (ret != ERROR_OK)
+            return ret;
+
+        value <<= shift;
+        for (i = 0; i < size; ++i) {
+            *(buffer++) = (value >> 24);
+            value <<= 8;
+        }
     }
 
     return ERROR_OK;
 }
 
+static int read_virt_mem(struct target *target, uint32_t address,
+                         enum memory_access_size size, uint8_t *buffer) {
+    int ret;
+
+    if (target->state != TARGET_HALTED) {
+        LOG_ERROR("target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = write_gpr_reg(target, tmp_reg_addr, address);
+    if (ret != ERROR_OK)
+        return ret;
+
+    return read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, size, buffer);
+}
+
 // чтение spr-регистра в data
 static int read_spr_reg(struct target *target, int spr_num, uint8_t *data) {
-    uint32_t code = 0x7C0002A6 | (tmp_reg_data << 21) |
-                    ((spr_num & 0x1F) << 16) |
-                    ((spr_num & 0x3E0) << (11 - 5)); // mfspr tmp_reg_data, spr
-    int ret = stuff_code(target, code);
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+    int ret = stuff_code(target, mfspr(tmp_reg_data,spr_num));
     if (ret != ERROR_OK)
         return ret;
 
@@ -578,14 +515,11 @@ static int read_spr_reg(struct target *target, int spr_num, uint8_t *data) {
 
 // запись значения data в spr-регистр
 static int write_spr_reg(struct target *target, int spr_num, uint32_t data) {
-    uint32_t code;
     int ret = write_gpr_reg(target, tmp_reg_data, data);
     if (ret != ERROR_OK)
         return ret;
 
-    code = 0x7C0003A6 | (tmp_reg_data << 21) | ((spr_num & 0x1F) << 16) |
-           ((spr_num & 0x3E0) << (11 - 5)); // mtspr spr, tmp_reg_data
-    ret = stuff_code(target, code);
+    ret = stuff_code(target, mtspr(spr_num,tmp_reg_data));
     if (ret != ERROR_OK)
         return ret;
 
@@ -601,7 +535,6 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
     static const uint64_t bad = 0xbabadedababadedaull;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint8_t value_m[8];
-    uint32_t code;
     int ret;
 
     if ((!use_fpu_get(target)) ||
@@ -614,9 +547,7 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
         ret = write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
         if (ret != ERROR_OK)
             return ret;
-        code = 0xd8000000 | (reg_num << 21) |
-               (tmp_reg_addr << 16); // stfd Fx, 0(tmp_reg_addr)
-        ret = stuff_code(target, code);
+        ret = stuff_code(target, stfd(reg_num,tmp_reg_addr,0));
         if (ret != ERROR_OK)
             return ret;
         if ( use_static_mem_endianness(target) == TARGET_BIG_ENDIAN ){
@@ -635,8 +566,7 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
                 return ret;
         }
     } else if (use_stack_get(target)) {
-        code = 0xd801fff8 | (reg_num << 21); // stfd Fx, -8(sp)
-        ret = stuff_code(target, code);
+        ret = stuff_code(target, stfd(reg_num,reg_sp,-8));
         if (ret != ERROR_OK)
             return ret;
         if ( use_stack_endianness(target) == TARGET_BIG_ENDIAN ){
@@ -671,7 +601,6 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
     h_u64_to_be (value_m,value);
     int ret;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    uint32_t code;
 
     if ((!use_fpu_get(target)) ||
         ((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) == 0)) {
@@ -697,10 +626,10 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
                 return ret;
         }
 
-        write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
-        code = 0xc8000000 | (reg_num << 21) |
-               (tmp_reg_addr << 16); // lfd Fx, 0(tmp_reg_addr)
-        ret = stuff_code(target, code);
+        ret = write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
+        if (ret != ERROR_OK)
+            return ret;
+        ret = stuff_code(target, lfd(reg_num,tmp_reg_addr,0));
         if (ret != ERROR_OK)
             return ret;
 
@@ -724,8 +653,7 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
                 return ret;
         }
 
-        code = 0xc801fff8 | (reg_num << 21); // lfd Fx, -8(sp)
-        ret = stuff_code(target, code);
+        ret = stuff_code(target, lfd(reg_num,reg_sp,-8));
         if (ret != ERROR_OK)
             return ret;
 
@@ -764,8 +692,7 @@ static int write_MSR(struct target *target, uint32_t value) {
     ret = write_gpr_reg(target, tmp_reg_data, value);
     if (ret != ERROR_OK)
         return ret;
-    ret = stuff_code(target,
-                     0x7C000124 | (tmp_reg_data << 21)); // mtmsr tmp_reg_data
+    ret = stuff_code(target,mtmsr(tmp_reg_data,true));
     if (ret != ERROR_OK)
         return ret;
 
@@ -777,9 +704,8 @@ static int write_MSR(struct target *target, uint32_t value) {
 static int read_MSR(struct target *target, uint8_t *value) {
     int ret;
 
-    ret = stuff_code(target,
-                     0x7C0000A6 | (tmp_reg_data << 21)); // mfmsr tmp_reg_data
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+    ret = stuff_code(target,mfmsr(tmp_reg_data));
     if (ret != ERROR_OK)
         return ret;
     ret = read_gpr_reg(target, tmp_reg_data, value);
@@ -791,13 +717,10 @@ static int read_MSR(struct target *target, uint8_t *value) {
 
 static int read_DCR(struct target *target, uint32_t addr, uint32_t *value) {
     int ret;
-    uint32_t code;
     ret = write_gpr_reg(target, tmp_reg_addr, addr);
     if (ret != ERROR_OK)
         return ret;
-    code = 0x7C000206 | (tmp_reg_data << 21) | (tmp_reg_addr << 16);
-    LOG_DEBUG("%x", code);
-    ret = stuff_code(target, code); // mfdcrx tmp_reg_data,tmp_reg_addr
+    ret = stuff_code(target, mfdcrx(tmp_reg_data,tmp_reg_addr));
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
     if (ret != ERROR_OK)
         return ret;
@@ -814,10 +737,8 @@ static int write_DCR(struct target *target, uint32_t addr, uint32_t value) {
     ret = write_gpr_reg(target, tmp_reg_data, value);
     if (ret != ERROR_OK)
         return ret;
-    ret = stuff_code(
-        target, 0x7C000306 | (tmp_reg_data << 21) |
-                    (tmp_reg_addr << 16)); // mtdcrx tmp_reg_addr,tmp_reg_data
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+    ret = stuff_code(target, mtdcrx(tmp_reg_addr,tmp_reg_data));
     if (ret != ERROR_OK)
         return ret;
     return ERROR_OK;
@@ -997,6 +918,15 @@ static int write_dirty_fpu_regs(struct target *target) {
     struct reg *reg;
     int i;
     int ret;
+    bool need_flush = ppc476fp->FPSCR_reg->dirty;
+
+    for (i = 0 ; i < FPR_REG_COUNT ; ++i){
+        need_flush |= ppc476fp->fpr_regs[i]->dirty;
+    }
+
+    if (!need_flush){
+        return ERROR_OK;
+    }
 
     if (target->state != TARGET_HALTED) {
         return ERROR_TARGET_NOT_HALTED;
@@ -1020,7 +950,7 @@ static int write_dirty_fpu_regs(struct target *target) {
         if (ret != ERROR_OK)
             return ret;
         ppc476fp->fpr_regs[0]->dirty = true;
-        ret = stuff_code(target, 0xFDFE058E); // mtfsf 255, F0
+        ret = stuff_code(target, mtfsf(255,0));
         if (ret != ERROR_OK)
             return ret;
         ppc476fp->FPSCR_reg->dirty = false;
@@ -1084,7 +1014,7 @@ static int read_required_fpu_regs(struct target *target) {
     if (!ppc476fp->FPSCR_reg->valid) {
         if ( ppc476fp->fpr_regs[0]->valid ){
             ppc476fp->fpr_regs[0]->dirty = true;
-            ret = stuff_code(target, 0xFC00048E); // mffs F0
+            ret = stuff_code(target, mffs(0));
             if (ret != ERROR_OK)
                 return ret;
         }
@@ -1313,7 +1243,7 @@ static void build_reg_caches(struct target *target) {
     }
 
     for (i = 0; i < FPR_REG_COUNT; ++i) {
-        static const char names[GPR_REG_COUNT][4] = {
+        static const char names[FPR_REG_COUNT][4] = {
             "F0","F1","F2","F3","F4","F5","F6","F7","F8","F9",
             "F10","F11","F12","F13","F14","F15","F16","F17","F18","F19",
             "F20","F21","F22","F23","F24","F25","F26","F27","F28","F29",
@@ -1695,15 +1625,14 @@ static int save_state(struct target *target) {
 }
 
 static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t len) {
-    // isync; msync; icbi 0, tmp_reg_addr; isync; msync;
     const uint32_t begin = addr & (~31u);
     const uint32_t end = ((addr + len) & (~31u)) + ((addr+len)&31u ? 32 : 0);
     int result = ERROR_OK;
-    int ret = stuff_code(target, 0x4c00012c);
+    int ret = stuff_code(target, isync());
     if (ret != ERROR_OK) {
         return ret;
     }
-    ret = stuff_code(target, 0x7c0004ac);
+    ret = stuff_code(target, msync());
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -1713,18 +1642,18 @@ static int cache_l1i_invalidate(struct target *target, uint32_t addr, uint32_t l
 	    result = ret;
             break;
         }
-        ret = stuff_code(target, 0x7c0007ac | (tmp_reg_addr<<11));
+        ret = stuff_code(target, icbi(0,tmp_reg_addr));
         if (ret != ERROR_OK) {
 	    result = ret;
             break;
         }
     }
 
-    ret = stuff_code(target, 0x4c00012c);
+    ret = stuff_code(target, isync());
     if (ret != ERROR_OK) {
         result = ret;
     }
-    ret = stuff_code(target, 0x7c0004ac);
+    ret = stuff_code(target, msync());
     if (ret != ERROR_OK) {
         return ret;
     }else{
@@ -1959,10 +1888,7 @@ static int load_tlb(struct target *target, int index_way,
     if (ret != ERROR_OK)
         return ret;
 
-    ret =
-        stuff_code(target, 0x7C220764 | (tmp_reg_data << 21) |
-                               (tmp_reg_addr
-                                << 16)); // tlbre tmp_reg_data, tmp_reg_addr, 0
+    ret = stuff_code(target, tlbre(tmp_reg_data, tmp_reg_addr, 0));
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
     if (ret != ERROR_OK)
         return ret;
@@ -1974,20 +1900,15 @@ static int load_tlb(struct target *target, int index_way,
     if ((hw->data[0] & TLB_0_V_MASK) == 0)
         return ERROR_OK;
 
-    ret =
-        stuff_code(target, 0x7C220F64 | (tmp_reg_data << 21) |
-                               (tmp_reg_addr
-                                << 16)); // tlbre tmp_reg_data, tmp_reg_addr, 1
+    ret = stuff_code(target, tlbre(tmp_reg_data, tmp_reg_addr, 1));
     if (ret != ERROR_OK)
         return ret;
+
     ret = read_gpr_reg(target, tmp_reg_data, (uint8_t *)&hw->data[1]);
     if (ret != ERROR_OK)
         return ret;
 
-    ret =
-        stuff_code(target, 0x7C221764 | (tmp_reg_data << 21) |
-                               (tmp_reg_addr
-                                << 16)); // tlbre tmp_reg_data, tmp_reg_addr, 2
+    ret = stuff_code(target, tlbre(tmp_reg_data, tmp_reg_addr, 2));
     if (ret != ERROR_OK)
         return ret;
     ret = read_gpr_reg(target, tmp_reg_data, (uint8_t *)&hw->data[2]);
@@ -2047,10 +1968,7 @@ static int write_tlb(struct target *target, int index_way,
     
     target_to_ppc476fp(target)->memory_checked = false;
 
-    ret =
-        stuff_code(target, 0x7c0007a4 | (tmp_reg_addr << 21) |
-                               (tmp_reg_data
-                                << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 0
+    ret = stuff_code(target,tlbwe(tmp_reg_addr,tmp_reg_data,0));
     if (ret != ERROR_OK)
         return ret;
 
@@ -2061,20 +1979,16 @@ static int write_tlb(struct target *target, int index_way,
     ret = write_gpr_reg(target, tmp_reg_addr, hw->data[1]);
     if (ret != ERROR_OK)
         return ret;
-    ret =
-        stuff_code(target, 0x7c000fa4 | (tmp_reg_addr << 21) |
-                               (tmp_reg_data
-                                << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 1
+
+    ret = stuff_code(target,tlbwe(tmp_reg_addr,tmp_reg_data,1));
     if (ret != ERROR_OK)
         return ret;
 
     ret = write_gpr_reg(target, tmp_reg_addr, hw->data[2]);
     if (ret != ERROR_OK)
         return ret;
-    ret =
-        stuff_code(target, 0x7c0017a4 | (tmp_reg_addr << 21) |
-                               (tmp_reg_data
-                                << 16)); // tlbwe tmp_reg_addr, tmp_reg_data, 2
+
+    ret = stuff_code(target,tlbwe(tmp_reg_addr,tmp_reg_data,2));
     if (ret != ERROR_OK)
         return ret;
 
@@ -2258,7 +2172,7 @@ static int restore_phys_mem(struct target *target,
         return ret;
 
     // syncing
-    ret = stuff_code(target, 0x4C00012C); // isync
+    ret = stuff_code(target, isync());
     if (ret != ERROR_OK)
         return ret;
 
@@ -2294,7 +2208,7 @@ static int access_phys_mem(struct target *target, uint32_t new_ERPN_RPN) {
         return ret;
 
     // syncing
-    ret = stuff_code(target, 0x4C00012C); // isync
+    ret = stuff_code(target, isync());
     if (ret != ERROR_OK)
         return ret;
 
@@ -2674,7 +2588,7 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
         return ret;
 
     // syncing
-    ret = stuff_code(target, 0x4C00012C); // isync
+    ret = stuff_code(target, isync());
     if (ret != ERROR_OK)
         return ret;
 
@@ -2734,7 +2648,7 @@ static int handle_tlb_drop_command_internal(struct command_invocation *cmd,
             return ret;
 
         // syncing
-        ret = stuff_code(target, 0x4C00012C); // isync
+        ret = stuff_code(target, isync());
         if (ret != ERROR_OK)
             return ret;
 
@@ -2794,7 +2708,7 @@ static int handle_tlb_drop_all_command_internal(struct target *target) {
     }
 
     // syncing
-    ret = stuff_code(target, 0x4C00012C); // isync
+    ret = stuff_code(target, isync());
     if (ret != ERROR_OK)
         return ret;
 
@@ -4222,7 +4136,7 @@ COMMAND_HANDLER(ppc476fp_code_isync_command) {
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
-    return stuff_code(target, 0x4c00012c);
+    return stuff_code(target, isync());
 }
 
 COMMAND_HANDLER(ppc476fp_code_msync_command) {
@@ -4233,7 +4147,7 @@ COMMAND_HANDLER(ppc476fp_code_msync_command) {
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
-    return stuff_code(target, 0x7c0004ac);
+    return stuff_code(target, msync());
 }
 
 COMMAND_HANDLER(ppc476fp_code_ici_command) {
@@ -4244,7 +4158,7 @@ COMMAND_HANDLER(ppc476fp_code_ici_command) {
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
-    return stuff_code(target, 0x7c00078c);
+    return stuff_code(target, ici());
 }
 
 COMMAND_HANDLER(ppc476fp_code_dci_0_command) {
@@ -4255,7 +4169,7 @@ COMMAND_HANDLER(ppc476fp_code_dci_0_command) {
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
-    return stuff_code(target, 0x7c00038c);
+    return stuff_code(target, dci(0));
 }
 
 COMMAND_HANDLER(ppc476fp_code_dci_2_command) {
@@ -4266,7 +4180,7 @@ COMMAND_HANDLER(ppc476fp_code_dci_2_command) {
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
-    return stuff_code(target, 0x7c40038c);
+    return stuff_code(target, dci(2));
 }
 
 COMMAND_HANDLER(ppc476fp_code_dcbf_command) {
@@ -4290,7 +4204,7 @@ COMMAND_HANDLER(ppc476fp_code_dcbf_command) {
     }
 
 
-    ret = stuff_code(target, 0x7c0000ac | (tmp_reg_addr << 11));
+    ret = stuff_code(target, dcbf(0,tmp_reg_data));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run dcbf 0, R%i", tmp_reg_addr);
         return ret;
@@ -4318,8 +4232,7 @@ COMMAND_HANDLER(ppc476fp_code_dcbt_command) {
         return ret;
     }
 
-
-    ret = stuff_code(target, 0x7c00022c | (tmp_reg_addr << 11));
+    ret = stuff_code(target, dcbt(0,tmp_reg_data));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run dcbt 0, R%i", tmp_reg_addr);
         return ret;
@@ -4349,7 +4262,7 @@ COMMAND_HANDLER(ppc476fp_code_dcread_command) {
 
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
 
-    ret = stuff_code(target, 0x7c00028c | (tmp_reg_data << 21) | (tmp_reg_addr << 11) );
+    ret = stuff_code(target, dcread(tmp_reg_data,0,tmp_reg_addr));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run dcread R%i, R0, R%i", tmp_reg_data, tmp_reg_addr);
         return ret;
@@ -4386,7 +4299,7 @@ COMMAND_HANDLER(ppc476fp_code_icbi_command) {
     }
 
 
-    ret = stuff_code(target, 0x7c0007ac | (tmp_reg_addr << 11));
+    ret = stuff_code(target, icbi(0,tmp_reg_addr));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run icbi 0, R%i", tmp_reg_addr);
         return ret;
@@ -4415,7 +4328,7 @@ COMMAND_HANDLER(ppc476fp_code_icbt_command) {
     }
 
 
-    ret = stuff_code(target, 0x7c00002c | (tmp_reg_addr << 11));
+    ret = stuff_code(target, icbt(0,tmp_reg_addr));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run icbt 0, R%i", tmp_reg_addr);
         return ret;
@@ -4443,7 +4356,7 @@ COMMAND_HANDLER(ppc476fp_code_icread_command) {
         return ret;
     }
 
-    ret = stuff_code(target, 0x7c0007cc | (tmp_reg_addr << 11) );
+    ret = stuff_code(target, icread(0,tmp_reg_addr) );
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run icread R0, R%i", tmp_reg_addr);
         return ret;
@@ -4472,7 +4385,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
                     return ret;
                 }
 
-                ret = stuff_code(target, 0x7c00028c | (tmp_reg_data << 21) | (tmp_reg_addr << 11) );
+                ret = stuff_code(target, dcread(tmp_reg_data,0,tmp_reg_addr) );
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't run dcread R%i, R0, R%i", tmp_reg_data, tmp_reg_addr);
                     return ret;
@@ -4530,7 +4443,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
                     return ret;
                 }
 
-                ret = stuff_code(target, 0x7c0007cc | (tmp_reg_addr << 11) );
+                ret = stuff_code(target, icread(0,tmp_reg_addr) );
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't run icread R0, R%i", tmp_reg_addr);
                     return ret;

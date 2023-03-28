@@ -64,6 +64,7 @@ enum SPR_REG_NUM {
     SPR_REG_NUM_MMUCR = 946,
     SPR_REG_NUM_MMUBE0 = 820,
     SPR_REG_NUM_MMUBE1 = 821,
+    SPR_REG_NUM_DBDR = 1011,
 };
 
 enum DBCR_bits {
@@ -170,8 +171,11 @@ static const uint32_t TLB_PARAMS_MASK_UXWR = BIT(12);
 static const uint32_t TLB_PARAMS_MASK_SXWR = BIT(13);
 static const uint32_t TLB_PARAMS_MASK_BLTD = BIT(14);
 
-const int tmp_reg_addr = 30;
-const int tmp_reg_data = 31;
+enum reg_numbers {
+    reg_sp = 1,
+    tmp_reg_addr = 30,
+    tmp_reg_data = 31,
+};
 
 enum memory_access_size {
     memory_access_size_byte = 1,
@@ -640,6 +644,36 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data);
  * Не использует DBDR, записывает значение через инструкции lis, li и ori
  */
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data);
+
+/**
+ * @brief Обёртка над инструкциями lbz, lhz, lwz
+ *
+ * Выполняет чтение, используя указанные регистры, сдвиг и размер. Если buffer
+ * не NULL, заполняет его значением rt после чтения
+ *
+ * @param[in] target Указатель на объект target
+ * @param[in] rt Номер регистра rt, используемого для данных
+ * @param[in] ra Номер регистра ra, используемого для адреса
+ * @param[in] d Размер сдвига, относительно адреса в ra
+ * @param[in] size Размер слова данных
+ * @param[in] buffer Область, куда нужно положить данные из rt (может быть NULL)
+*/
+static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, uint8_t *buffer);
+
+/**
+ * @brief Обёртка над инструкциями stb, sth, stw
+ *
+ * Выполняет запись, используя указанные регистры, сдвиг и размер. Если buffer
+ * не NULL, заполняет rt перед записью
+ *
+ * @param[in] target Указатель на объект target
+ * @param[in] rt Номер регистра rt, используемого для данных
+ * @param[in] ra Номер регистра ra, используемого для адреса
+ * @param[in] d Размер сдвига, относительно адреса в ra
+ * @param[in] size Размер слова данных
+ * @param[in] buffer Данные, которые нужно положить в rt (может быть NULL)
+*/
+static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, const uint8_t *buffer);
 
 /**
  * @brief Прочитать память в окрестности стека
