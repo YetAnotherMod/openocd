@@ -289,53 +289,18 @@ static int write_gpr_reg(struct target *target, int reg_num, uint32_t data) {
     return ret;
 }
 
-// запись значения в область рядом с указателем стека. Внимание! адреса после
-// указателя стека заняты проверяет чистоту r1, при необходимости
-// восстанавливает из эталона
-static int write_at_stack(struct target *target, int16_t shift,
-                          enum memory_access_size size, const uint8_t *buffer) {
-
-    if (target->state != TARGET_HALTED) {
-        LOG_ERROR("target not halted");
-        return ERROR_TARGET_NOT_HALTED;
-    }
-
-    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    if (ppc476fp->gpr_regs[reg_sp]->dirty) {
-        write_gpr_reg(target, reg_sp, get_reg_value_32(ppc476fp->gpr_regs[reg_sp]));
-        ppc476fp->gpr_regs[reg_sp]->dirty = false;
-    }
-
-    return write_virt_mem_raw(target,tmp_reg_data,reg_sp, shift,size, buffer);
-}
-
-// чтение значения из области рядом с указателем стека
-// проверяет чистоту r1, при необходимости восстанавливает из эталона
-static int read_at_stack(struct target *target, int16_t shift,
-                         enum memory_access_size size, uint8_t *buffer) {
-
-    if (target->state != TARGET_HALTED) {
-        LOG_ERROR("target not halted");
-        return ERROR_TARGET_NOT_HALTED;
-    }
-
-    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    if (ppc476fp->gpr_regs[reg_sp]->dirty) {
-        write_gpr_reg(target, reg_sp, get_reg_value_32(ppc476fp->gpr_regs[reg_sp]));
-        ppc476fp->gpr_regs[reg_sp]->dirty = false;
-    }
-
-    return read_virt_mem_raw(target, tmp_reg_data, reg_sp, shift, size, buffer);
-}
-
 // проверка доступности области стека. Происходит по принципу: проверка
 // корректности значения в r1, после чего в свободную часть пытаются записать 8
 // байт (2 слова), после чего считать и сравнить с эталоном. если чтение
 // удалось, стек считается рабочим
 static int test_memory_at_stack(struct target *target, enum target_endianness *endianness) {
-    return test_memory_at_addr(target, get_reg_value_32(target_to_ppc476fp(target)->gpr_regs[reg_sp])-8, endianness);
+    return test_memory_at_addr(target, reg_sp, -8, endianness);
 }
-static int test_memory_at_addr(struct target *target, uint32_t addr, enum target_endianness *endianness) {
+static int test_memory_at_static_mem(struct target *target, enum target_endianness *endianness) {
+    write_gpr_reg(target,tmp_reg_addr,use_static_mem_addr(target));
+    return test_memory_at_addr(target, tmp_reg_addr, 0, endianness);
+}
+static int test_memory_at_addr(struct target *target, uint32_t ra, int16_t shift, enum target_endianness *endianness) {
     uint32_t value_1;
     uint32_t value_2;
     uint8_t endian;
@@ -355,23 +320,20 @@ static int test_memory_at_addr(struct target *target, uint32_t addr, enum target
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    if ((addr < 8) || ((addr & 0x3) != 0)) // check the stack pointer
-        return ERROR_MEMORY_AT_STACK;
-
-    ret = write_virt_mem(target, addr+0, 4, (uint8_t *)&magic1);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift+0, 4, (uint8_t *)&magic1);
     if (ret != ERROR_OK)
         return ret;
-    ret = write_virt_mem(target, addr+4, 4, (uint8_t *)&magic2);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift+4, 4, (uint8_t *)&magic2);
     if (ret != ERROR_OK)
         return ret;
 
-    ret = read_virt_mem(target, addr+0, 4, (uint8_t *)&value_1);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+0, 4, (uint8_t *)&value_1);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_virt_mem(target, addr+4, 4, (uint8_t *)&value_2);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+4, 4, (uint8_t *)&value_2);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_virt_mem(target, addr, 1, &endian);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+0, 1, &endian);
     if (ret != ERROR_OK)
         return ret;
 
@@ -427,16 +389,6 @@ static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, i
     return stuff_code(target, code);
 }
 
-static int write_virt_mem(struct target *target, uint32_t address,
-                          enum memory_access_size size, const uint8_t *buffer) {
-    int ret = write_gpr_reg(target, tmp_reg_addr, address);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-
-    return write_virt_mem_raw(target,tmp_reg_data,tmp_reg_addr,0,size, buffer);
-}
-
 // Чтение значения с эффективного адреса
 static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, uint8_t *buffer) {
     uint32_t code;
@@ -487,22 +439,6 @@ static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, in
     return ERROR_OK;
 }
 
-static int read_virt_mem(struct target *target, uint32_t address,
-                         enum memory_access_size size, uint8_t *buffer) {
-    int ret;
-
-    if (target->state != TARGET_HALTED) {
-        LOG_ERROR("target not halted");
-        return ERROR_TARGET_NOT_HALTED;
-    }
-
-    ret = write_gpr_reg(target, tmp_reg_addr, address);
-    if (ret != ERROR_OK)
-        return ret;
-
-    return read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, size, buffer);
-}
-
 // чтение spr-регистра в data
 static int read_spr_reg(struct target *target, int spr_num, uint8_t *data) {
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
@@ -536,58 +472,49 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint8_t value_m[8];
     int ret;
+    uint32_t ra;
+    int16_t shift;
+    enum target_endianness endian;
 
     if ((!use_fpu_get(target)) ||
         ((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) == 0)) {
         *value = bad;
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
-
     if (use_static_mem_get(target)) {
-        ret = write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
-        if (ret != ERROR_OK)
-            return ret;
-        ret = stuff_code(target, stfd(reg_num,tmp_reg_addr,0));
-        if (ret != ERROR_OK)
-            return ret;
-        if ( use_static_mem_endianness(target) == TARGET_BIG_ENDIAN ){
-            ret = read_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = read_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }else{
-            ret = read_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = read_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }
+        ra = tmp_reg_addr;
+        shift = 0;
+        write_gpr_reg(target,tmp_reg_addr,use_static_mem_addr(target));
+        endian = use_static_mem_endianness(target);
     } else if (use_stack_get(target)) {
-        ret = stuff_code(target, stfd(reg_num,reg_sp,-8));
-        if (ret != ERROR_OK)
-            return ret;
-        if ( use_stack_endianness(target) == TARGET_BIG_ENDIAN ){
-            ret = read_at_stack(target, -8, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = read_at_stack(target, -4, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }else{
-            ret = read_at_stack(target, -4, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = read_at_stack(target, -8, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }
+        ra = reg_sp;
+        shift = -8;
+        endian = use_stack_endianness(target);
     } else {
         *value = bad;
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
+    
+    ret = stuff_code(target, stfd(reg_num,tmp_reg_addr,shift));
+    if (ret != ERROR_OK)
+        return ret;
+
+    if ( endian == TARGET_BIG_ENDIAN ){
+        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m + 4);
+        if (ret != ERROR_OK)
+            return ret;
+    }else{
+        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m + 4);
+        if (ret != ERROR_OK)
+            return ret;
+    }
+
     *value = be_to_h_u64(value_m);
     return ERROR_OK;
 }
@@ -601,65 +528,47 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
     h_u64_to_be (value_m,value);
     int ret;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+    uint32_t ra;
+    int16_t shift;
+    enum target_endianness endian;
 
     if ((!use_fpu_get(target)) ||
         ((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) == 0)) {
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     if (use_static_mem_get(target)) {
-
-        ppc476fp->fpr_regs[reg_num]->dirty = true;
-
-        if ( use_static_mem_endianness(target) == TARGET_BIG_ENDIAN ){
-            ret = write_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = write_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }else{
-            ret = write_virt_mem(target, use_static_mem_addr(target) + 4, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = write_virt_mem(target, use_static_mem_addr(target) + 0, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }
-
-        ret = write_gpr_reg(target, tmp_reg_addr, use_static_mem_addr(target));
-        if (ret != ERROR_OK)
-            return ret;
-        ret = stuff_code(target, lfd(reg_num,tmp_reg_addr,0));
-        if (ret != ERROR_OK)
-            return ret;
-
+        ra = tmp_reg_addr;
+        shift = 0;
+        write_gpr_reg(target,tmp_reg_addr,use_static_mem_addr(target));
+        endian = use_static_mem_endianness(target);
     } else if (use_stack_get(target)) {
-
-        ppc476fp->fpr_regs[reg_num]->dirty = true;
-
-        if ( use_stack_endianness(target) == TARGET_BIG_ENDIAN ){
-            ret = write_at_stack(target, -8, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = write_at_stack(target, -4, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }else{
-            ret = write_at_stack(target, -4, 4, value_m);
-            if (ret != ERROR_OK)
-                return ret;
-            ret = write_at_stack(target, -8, 4, value_m + 4);
-            if (ret != ERROR_OK)
-                return ret;
-        }
-
-        ret = stuff_code(target, lfd(reg_num,reg_sp,-8));
-        if (ret != ERROR_OK)
-            return ret;
-
+        ra = reg_sp;
+        shift = -8;
+        endian = use_stack_endianness(target);
     } else {
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
+    ppc476fp->fpr_regs[reg_num]->dirty = true;
+
+    if ( endian == TARGET_BIG_ENDIAN ){
+        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m + 4);
+        if (ret != ERROR_OK)
+            return ret;
+    }else{
+        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m + 4);
+        if (ret != ERROR_OK)
+            return ret;
+    }
+    ret = stuff_code(target, lfd(reg_num,ra,shift));
+    if (ret != ERROR_OK)
+        return ret;
+
     return ERROR_OK;
 }
 
@@ -1355,22 +1264,23 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
 
     static const uint32_t TRAP_INSTRUCTION_CODE = 0x0800e07f;
 
-    ret = read_virt_mem(target, (uint32_t)bp->address, 4,
-                        (uint8_t *)bp->orig_instr);
+    ret = write_gpr_reg(target,tmp_reg_addr,(uint32_t)bp->address);
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_virt_mem(target, (uint32_t)bp->address, 4,
-                         (const uint8_t *)&TRAP_INSTRUCTION_CODE);
+    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)bp->orig_instr);
     if (ret != ERROR_OK)
         return ret;
+
+    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (const uint8_t *)&TRAP_INSTRUCTION_CODE);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)&test_value);
+    if (ret != ERROR_OK)
+        return ret;
+
     ret = cache_l1i_invalidate(target, (uint32_t)bp->address, 4);
-    if (ret != ERROR_OK)
-        return ret;
-
-    // test
-    ret =
-        read_virt_mem(target, (uint32_t)bp->address, 4, (uint8_t *)&test_value);
     if (ret != ERROR_OK)
         return ret;
 
@@ -1390,14 +1300,15 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp) {
 
     assert(bp->is_set != 0);
 
-    ret = write_virt_mem(target, (uint32_t)bp->address, 4,
-                         (const uint8_t *)bp->orig_instr);
+    ret = write_gpr_reg(target,tmp_reg_addr,(uint32_t)bp->address);
     if (ret != ERROR_OK)
         return ret;
 
-    // проверка установки
-    ret =
-        read_virt_mem(target, (uint32_t)bp->address, 4, (uint8_t *)&test_value);
+    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)bp->orig_instr);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)&test_value);
     if (ret != ERROR_OK)
         return ret;
 
@@ -2961,6 +2872,8 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
                                 uint8_t *buffer) {
     uint32_t i;
     int result = ERROR_OK;
+    uint32_t shifted = -32768;
+    int ret;
 
     LOG_DEBUG("coreid=%i, address: 0x%lX, size: %u, count: 0x%X",
               target->coreid, address, size, count);
@@ -2974,21 +2887,24 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    memset(buffer, 0, size * count); // clear result buffer
-
     for (i = 0; i < count; ++i) {
         keep_alive();
-        int ret = read_virt_mem(target, (uint32_t)address, size, buffer);
+        if ((int)((i+1)*size-shifted)>32768){
+            shifted += 65536;
+            ret = write_gpr_reg(target, tmp_reg_addr, address+shifted);
+            if (ret != ERROR_OK){
+                result = ret;
+                break;
+            }
+        }
+        ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, (int16_t)(i*size-shifted), size, buffer + i*size);
         if (ret != ERROR_OK){
             result = ret;
-        break;
+            break;
+        }
     }
 
-        address += size;
-        buffer += size;
-    }
-
-    int ret = flush_registers(target);
+    ret = flush_registers(target);
     if (result == ERROR_OK){
         return ret;
     }else{
@@ -3003,6 +2919,8 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
                                  const uint8_t *buffer) {
     uint32_t i;
     int result = ERROR_OK;
+    uint32_t shifted = -32768;
+    int ret;
 
     LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
               address, size, count);
@@ -3018,16 +2936,19 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
 
     for (i = 0; i < count; ++i) {
         keep_alive();
-        int ret = write_virt_mem(target, (uint32_t)address + i*size, size, buffer + i*size);
+        if ((int)((i+1)*size-shifted)>32768){
+            shifted += 65536;
+            ret = write_gpr_reg(target, tmp_reg_addr, address+shifted);
+            if (ret != ERROR_OK){
+                result = ret;
+                break;
+            }
+        }
+        ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, (int16_t)(i*size-shifted), size, buffer + i*size);
         if (ret != ERROR_OK){
             result = ret;
             break;
         }
-    }
-
-    int ret = cache_l1i_invalidate(target, address, size * count);
-    if ((ret != ERROR_OK) && (result == ERROR_OK)){
-        result = ret;
     }
 
     ret = flush_registers(target);
@@ -3260,10 +3181,12 @@ static int ppc476fp_read_phys_memory(struct target *target,
                     break;
                 last_ERPN_RPN = new_ERPN_RPN;
             }
+            uint32_t pack_count = (0x40000000 - (address+i*size)%0x40000000)/size;
+            if (pack_count > count) 
+                pack_count = count;
 
-            ret = read_virt_mem(
-                target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size,
-                buffer);
+            keep_alive();
+            ret = ppc476fp_read_memory(target, (uint32_t)(address&0x3fffffff) + PHYS_MEM_BASE_ADDR, size, pack_count,buffer);
             if (ret != ERROR_OK)
                 break;
 
@@ -3272,15 +3195,14 @@ static int ppc476fp_read_phys_memory(struct target *target,
         }
         if(ret != ERROR_OK)
             result = ret;
-
     }
     // restore state
     ret = restore_phys_mem(target, &state);
     if(ret != ERROR_OK ){
         LOG_ERROR("can't restore phys mem context");
-    if ( result == ERROR_OK ){
-        result = ret;
-    }
+        if ( result == ERROR_OK ){
+            result = ret;
+        }
     }
 
     if (result != ERROR_OK){
@@ -3323,42 +3245,44 @@ static int ppc476fp_write_phys_memory(struct target *target,
 
     ret = init_phys_mem(target, &state);
     if (ret == ERROR_OK){
-    for (i = 0; i < count; ++i) {
-        new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
-        if (new_ERPN_RPN != last_ERPN_RPN) {
-            ret = access_phys_mem(target, new_ERPN_RPN);
+        for (i = 0; i < count; ++i) {
+            new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
+            if (new_ERPN_RPN != last_ERPN_RPN) {
+                ret = access_phys_mem(target, new_ERPN_RPN);
+                if (ret != ERROR_OK)
+                    break;
+                last_ERPN_RPN = new_ERPN_RPN;
+            }
+
+            uint32_t pack_count = (0x40000000 - (address+i*size)%0x40000000)/size;
+            if (pack_count > count) 
+                pack_count = count;
+
+            keep_alive();
+            ret = ppc476fp_write_memory(target, (uint32_t)(address&0x3fffffff) + PHYS_MEM_BASE_ADDR, size, pack_count,buffer);
             if (ret != ERROR_OK)
                 break;
-            last_ERPN_RPN = new_ERPN_RPN;
+            address += size*pack_count;
+            buffer += size*pack_count;
         }
-
-        keep_alive();
-        ret = write_virt_mem(
-            target, (uint32_t)(address & 0x3FFFFFFF) + PHYS_MEM_BASE_ADDR, size,
-            buffer);
-        if (ret != ERROR_OK)
-            break;
-        address += size;
-        buffer += size;
-    }
-    if(ret != ERROR_OK)
-        result = ret;
+        if(ret != ERROR_OK)
+            result = ret;
     }
     // restore state
     ret = restore_phys_mem(target, &state);
     if(ret != ERROR_OK ){
         LOG_ERROR("can't restore phys mem context");
-    if ( result == ERROR_OK ){
-        result = ret;
-    }
+        if ( result == ERROR_OK ){
+            result = ret;
+        }
     }
 
     if (result != ERROR_OK){
-    if (flush_registers(target))
-        LOG_ERROR("can't flush registers");
-    return result;
+        if (flush_registers(target))
+            LOG_ERROR("can't flush registers");
+        return result;
     }else{
-    return flush_registers(target);
+        return flush_registers(target);
     }
 }
 
@@ -3495,13 +3419,13 @@ static int use_static_mem_on(struct target *target, uint32_t base_addr) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     if (target->state == TARGET_HALTED) {
         enum target_endianness endianness = TARGET_ENDIAN_UNKNOWN;
-        int ret = test_memory_at_addr(target, base_addr, &endianness);
+        target_to_ppc476fp(target)->use_static_mem = base_addr;
+        int ret = test_memory_at_static_mem(target, &endianness);
         if (ret != ERROR_OK) {
-            LOG_ERROR("test_memory_at_addr failed, disable use_stack");
+            LOG_ERROR("test_memory_at_static_mem failed, disable use_static_mem");
             use_static_mem_off(target, reg_action_ignore);
             return ret;
         }
-        target_to_ppc476fp(target)->use_static_mem = base_addr;
         ppc476fp->use_static_mem_endianness = endianness;
         flush_registers(target);
     }else{

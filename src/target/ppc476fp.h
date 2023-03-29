@@ -676,46 +676,28 @@ static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, in
 static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, const uint8_t *buffer);
 
 /**
- * @brief Прочитать память в окрестности стека
- *
- * Выполняет одну операцию чтения размера size из окрестности SP в buffer
- *
- * @param[in] target Указатель на объект target
- * @param[in] shift Смещение в байтах относительно указателя стека
- * @param[in] size Размер слова данных операции чтения
- * @param[out] buffer Буфер для прочитанных данных
- * @return ERROR_OK - успешно, иначе - код ошибки
- */
-static int read_at_stack(struct target *target, int16_t shift,
-                         enum memory_access_size size, uint8_t *buffer);
-
-/**
- * @brief Записать значение в память в окрестности стека
- *
- * Выполняет одну операцию записи размера size из окрестности SP из buffer
- *
- * @param[in] target Указатель на объект target
- * @param[in] shift Смещение в байтах относительно указателя стека
- * @param[in] size Размер слова данных операции записи
- * @param[out] buffer Буфер с данным для записи
- * @return ERROR_OK - успешно, иначе - код ошибки
- */
-static int write_at_stack(struct target *target, int16_t shift,
-                          enum memory_access_size size, const uint8_t *buffer);
-
-/**
  * @brief Проверка работоспособности области стека
  *
- * Выполняет 2 записи эталонов по 4 байта в незанятой области стека
- * (всего 8 байт), после чего считывает и сверяет с эталоном. После
- * этого считывает ещё один байт для определения ендианности области
- * памяти.
+ * Выполняет test_memory_at_addr, передавая в качестве адреса указатель стека-8
  *
  * @param[in] target Указатель на объект target
  * @param[out] endianness Определение порядка байт в области стека
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
 static int test_memory_at_stack(struct target *target, enum target_endianness *endianness);
+
+/**
+ * @brief Проверка работоспособности области статической памяти
+ *
+ * Выполняет test_memory_at_addr, устанавливая адрес, переданный в
+ * use_static_mem_on
+ *
+ * @param[in] target Указатель на объект target
+ * @param[out] endianness Определение порядка байт в области стека
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ */
+static int test_memory_at_static_mem(struct target *target, enum target_endianness *endianness);
+
 /**
  * @brief Проверяет работоспособности произвольного адреса памяти
  *
@@ -725,43 +707,15 @@ static int test_memory_at_stack(struct target *target, enum target_endianness *e
  * памяти.
  *
  * @warning Адрес должен быть выровнен на 8
+ * @warning Функция не заносит адрес в ra, это нужно сделать до вызова
  *
  * @param[in] target Указатель на объект target
- * @param[in] addr Тестируемый адрес в памяти
+ * @param[in] ra Базовый регистр адреса
+ * @param[in] shift Смещение начала области относительно бащового адреса
  * @param[out] endianness Определение порядка байт в области стека
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
-static int test_memory_at_addr(struct target *target, uint32_t addr, enum target_endianness *endianness);
-
-/**
- * @brief Чтение памяти, по эффективному адресу
- *
- * Выполняет одну операцию чтения размера size с адреса, существующего в tlb, в
- * buffer
- *
- * @param[in] target Указатель на объект target
- * @param[in] address Эффективный адрес
- * @param[in] size Размер слова данных операции чтения
- * @param[out] buffer Буфер для прочитанных данных
- * @return ERROR_OK - успешно, иначе - код ошибки
- */
-static int read_virt_mem(struct target *target, uint32_t address,
-                         enum memory_access_size size, uint8_t *buffer);
-
-/**
- * @brief Запись памяти, по эффективному адресу
- *
- * Выполняет одну операцию записи размера size с адреса, существующего в tlb, из
- * buffer
- *
- * @param[in] target Указатель на объект target
- * @param[in] address Эффективный адрес
- * @param[in] size Размер слова данных операции записи
- * @param[in] buffer Буфер с данным для записи
- * @return ERROR_OK - успешно, иначе - код ошибки
- */
-static int write_virt_mem(struct target *target, uint32_t address,
-                          enum memory_access_size size, const uint8_t *buffer);
+static int test_memory_at_addr(struct target *target, uint32_t ra, int16_t shift, enum target_endianness *endianness);
 
 /**
  * @brief Чтение  регистра SPR
