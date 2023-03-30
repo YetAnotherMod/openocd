@@ -4128,7 +4128,7 @@ COMMAND_HANDLER(ppc476fp_code_dcbf_command) {
     }
 
 
-    ret = stuff_code(target, dcbf(0,tmp_reg_data));
+    ret = stuff_code(target, dcbf(0,tmp_reg_addr));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run dcbf 0, R%i", tmp_reg_addr);
         return ret;
@@ -4156,7 +4156,7 @@ COMMAND_HANDLER(ppc476fp_code_dcbt_command) {
         return ret;
     }
 
-    ret = stuff_code(target, dcbt(0,tmp_reg_data));
+    ret = stuff_code(target, dcbt(0,tmp_reg_addr));
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't run dcbt 0, R%i", tmp_reg_addr);
         return ret;
