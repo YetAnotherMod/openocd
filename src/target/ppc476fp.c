@@ -87,14 +87,6 @@ static inline uint32_t get_bits_32(uint32_t value, unsigned pos, unsigned len) {
     return (value >> pos) & ((1U << len) - 1);
 }
 
-static inline uint32_t set_bits_32(uint32_t value, unsigned pos, unsigned len,
-                                   uint32_t src) {
-    uint32_t tmp = src;
-    tmp &= ~(((1U << len) - 1U) << pos);
-    tmp |= value << pos;
-    return tmp;
-}
-
 static inline struct ppc476fp_common *
 target_to_ppc476fp(struct target *target) {
     return target->arch_info;
@@ -352,7 +344,6 @@ static int test_memory_at_addr(struct target *target, uint32_t ra, int16_t shift
 // Запись значения по эффективному адресу
 static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, const uint8_t *buffer) {
     uint32_t code;
-    uint32_t value;
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
@@ -374,10 +365,20 @@ static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, i
     }
 
     if (buffer != NULL){
-        value = 0;
-        for (unsigned int i = 0; i < size; ++i) {
-            value <<= 8;
-            value |= (uint32_t) * (buffer++);
+        uint32_t value = 0;
+
+        switch (size) {
+            case memory_access_size_byte:
+                value = *buffer;
+                break;
+            case memory_access_size_half_word:
+                value = target_buffer_get_u16(target,buffer);
+                break;
+            case memory_access_size_word:
+                value = target_buffer_get_u32(target,buffer);
+                break;
+            default:
+                assert(false);
         }
 
         int ret = write_gpr_reg(target, rt, value);
@@ -392,9 +393,6 @@ static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, i
 // Чтение значения с эффективного адреса
 static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, int16_t d, enum memory_access_size size, uint8_t *buffer) {
     uint32_t code;
-    uint32_t shift;
-    uint32_t value;
-    uint32_t i;
     int ret;
 
     if (target->state != TARGET_HALTED) {
@@ -405,15 +403,12 @@ static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, in
     switch (size) {
     case memory_access_size_byte:
         code = lbz(rt,ra,d);
-        shift = 24;
         break;
     case memory_access_size_half_word:
         code = lhz(rt,ra,d);
-        shift = 16;
         break;
     case memory_access_size_word:
         code = lwz(rt,ra,d);
-        shift = 0;
         break;
     default:
         assert(false);
@@ -425,14 +420,23 @@ static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, in
         return ret;
 
     if ( buffer != NULL ){
+        uint32_t value;
         ret = read_gpr_reg(target, rt, (uint8_t *)&value);
         if (ret != ERROR_OK)
             return ret;
 
-        value <<= shift;
-        for (i = 0; i < size; ++i) {
-            *(buffer++) = (value >> 24);
-            value <<= 8;
+        switch (size) {
+        case memory_access_size_byte:
+            *buffer = (uint8_t)value;
+            break;
+        case memory_access_size_half_word:
+            target_buffer_set_u16(target,buffer,value);
+            break;
+        case memory_access_size_word:
+            target_buffer_set_u32(target,buffer,value);
+            break;
+        default:
+            assert(false);
         }
     }
 
@@ -499,23 +503,16 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
     if (ret != ERROR_OK)
         return ret;
 
-    if ( endian == TARGET_BIG_ENDIAN ){
-        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
-    }else{
-        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
-    }
+    uint8_t *h = (endian == TARGET_BIG_ENDIAN?value_m:value_m+4);
+    uint8_t *l = (endian == TARGET_BIG_ENDIAN?value_m+4:value_m);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, h);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, l);
+    if (ret != ERROR_OK)
+        return ret;
 
-    *value = be_to_h_u64(value_m);
+    *value = target_buffer_get_u64(target,value_m);
     return ERROR_OK;
 }
 
@@ -525,7 +522,7 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
 // работать.
 static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
     uint8_t value_m[8];
-    h_u64_to_be (value_m,value);
+    target_buffer_set_u64 (target,value_m,value);
     int ret;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t ra;
@@ -550,21 +547,14 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
     }
     ppc476fp->fpr_regs[reg_num]->dirty = true;
 
-    if ( endian == TARGET_BIG_ENDIAN ){
-        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
-    }else{
-        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, value_m);
-        if (ret != ERROR_OK)
-            return ret;
-        ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, value_m + 4);
-        if (ret != ERROR_OK)
-            return ret;
-    }
+    uint8_t *h = (endian == TARGET_BIG_ENDIAN?value_m:value_m+4);
+    uint8_t *l = (endian == TARGET_BIG_ENDIAN?value_m+4:value_m);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, h);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, l);
+    if (ret != ERROR_OK)
+        return ret;
     ret = stuff_code(target, lfd(reg_num,ra,shift));
     if (ret != ERROR_OK)
         return ret;
@@ -1863,7 +1853,7 @@ static int write_tlb(struct target *target, int index_way,
     if (ret != ERROR_OK)
         return ret;
 
-    if ((hw->bltd < 6) && (data0 & TLB_0_V_MASK)) {
+    if ((hw->bltd < bltd_no) && (data0 & TLB_0_V_MASK)) {
         indexed_value = 0x8000000 | (hw->bltd << 24);
     } else {
         indexed_value =
@@ -2091,28 +2081,23 @@ static int restore_phys_mem(struct target *target,
 }
 
 static int access_phys_mem(struct target *target, uint32_t new_ERPN_RPN) {
-    struct tlb_hw_record hw;
+    struct tlb_hw_record hw = {{
+        TLB_0_V_MASK | TLB_0_TS_MASK |
+            ((PHYS_MEM_BASE_ADDR >> 12)<<TLB_0_EPN_BIT_POS) |
+            (DSIZ_1G<<TLB_0_DSIZ_BIT_POS),
+        
+        ((new_ERPN_RPN >> 20)<<TLB_1_ERPN_BIT_POS) |
+            ((new_ERPN_RPN & 0xFFFFF)<<TLB_1_RPN_BIT_POS),
+        
+        TLB_2_IL1I_MASK | TLB_2_IL1D_MASK |
+            (0x7<<TLB_2_WIMG_BIT_POS) |
+            (0x3<<TLB_2_UXWR_BIT_POS) |
+            (target->endianness == TARGET_LITTLE_ENDIAN?TLB_2_EN_MASK:0)},
+        PHYS_MEM_MAGIC_PID,
+        bltd_no
+    };
+
     int ret;
-
-    hw.data[0] = TLB_0_V_MASK | TLB_0_TS_MASK; // TS=1
-    hw.data[0] = set_bits_32(PHYS_MEM_BASE_ADDR >> 12, TLB_0_EPN_BIT_POS,
-                             TLB_0_EPN_BIT_LEN, hw.data[0]);
-    hw.data[0] = set_bits_32(DSIZ_1G, TLB_0_DSIZ_BIT_POS, TLB_0_DSIZ_BIT_LEN,
-                             hw.data[0]);
-
-    hw.data[1] = 0;
-    hw.data[1] = set_bits_32(new_ERPN_RPN >> 20, TLB_1_ERPN_BIT_POS,
-                             TLB_1_ERPN_BIT_LEN, hw.data[1]);
-    hw.data[1] = set_bits_32(new_ERPN_RPN & 0xFFFFF, TLB_1_RPN_BIT_POS,
-                             TLB_1_RPN_BIT_LEN, hw.data[1]);
-
-    hw.data[2] = TLB_2_IL1I_MASK | TLB_2_IL1D_MASK;
-    hw.data[2] =
-        set_bits_32(0x7, TLB_2_WIMG_BIT_POS, TLB_2_WIMG_BIT_LEN, hw.data[2]);
-    hw.data[2] =
-        set_bits_32(0x3, TLB_2_UXWR_BIT_POS, TLB_2_UXWR_BIT_LEN, hw.data[2]);
-
-    hw.tid = PHYS_MEM_MAGIC_PID;
 
     ret = write_tlb(target, PHYS_MEM_TLB_INDEX_WAY, &hw);
     if (ret != ERROR_OK)
@@ -2193,7 +2178,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
     params->en=0;
     params->uxwr=0;
     params->sxwr=0;
-    params->bltd = 6;
+    params->bltd = bltd_no;
 
     for (arg_index = 0; arg_index < argc; ++arg_index) {
         arg = argv[arg_index];
@@ -2275,7 +2260,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
                 } else if (strcmp(p, "auto") == 0) {
                     params->mask |= TLB_PARAMS_MASK_BLTD;
                     ret = ERROR_OK;
-                    params->bltd = 7;
+                    params->bltd = bltd_auto;
                 } else
                     ret = parse_uint32_params(TLB_PARAMS_MASK_BLTD, 5, p,
                                               &params->mask, &params->bltd);
@@ -2354,7 +2339,6 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
                                    struct target *target,
                                    struct tlb_command_params *params) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
-    struct tlb_hw_record hw;
     uint32_t saved_MMUCR;
     int index;
     int way;
@@ -2399,7 +2383,7 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
 
     bltd = params->bltd;
 
-    if (bltd != 6) {
+    if (bltd != bltd_no) {
         uint32_t mmube0;
         uint32_t mmube1;
         ret = read_spr_reg(target, SPR_REG_NUM_MMUBE0, (uint8_t *)&mmube0);
@@ -2410,19 +2394,19 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
             return ret;
         way = 0;
 
-        if (bltd == 7) {
+        if (bltd == bltd_auto) {
             if ((mmube0 & 4) == 0) {
-                bltd = 0;
+                bltd = bltd0;
             } else if ((mmube0 & 2) == 0) {
-                bltd = 1;
+                bltd = bltd1;
             } else if ((mmube0 & 1) == 0) {
-                bltd = 2;
+                bltd = bltd2;
             } else if ((mmube1 & 4) == 0) {
-                bltd = 3;
+                bltd = bltd3;
             } else if ((mmube1 & 2) == 0) {
-                bltd = 4;
+                bltd = bltd4;
             } else if ((mmube1 & 1) == 0) {
-                bltd = 5;
+                bltd = bltd5;
             } else {
                 LOG_ERROR("there is no free bltd for the UTLB record");
                 return ERROR_FAIL;
@@ -2461,38 +2445,16 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
         return ERROR_FAIL;
     }
 
-    hw.data[0] = TLB_0_V_MASK;
-    hw.data[0] = set_bits_32(params->epn, TLB_0_EPN_BIT_POS, TLB_0_EPN_BIT_LEN,
-                             hw.data[0]);
-    if (params->ts != 0)
-        hw.data[0] |= TLB_0_TS_MASK;
-    hw.data[0] = set_bits_32(params->dsiz, TLB_0_DSIZ_BIT_POS,
-                             TLB_0_DSIZ_BIT_LEN, hw.data[0]);
-
-    hw.data[1] = 0;
-    hw.data[1] = set_bits_32(params->rpn, TLB_1_RPN_BIT_POS, TLB_1_RPN_BIT_LEN,
-                             hw.data[1]);
-    hw.data[1] = set_bits_32(params->erpn, TLB_1_ERPN_BIT_POS,
-                             TLB_1_ERPN_BIT_LEN, hw.data[1]);
-
-    hw.data[2] = 0;
-    if (params->il1i != 0)
-        hw.data[2] |= TLB_2_IL1I_MASK;
-    if (params->il1d != 0)
-        hw.data[2] |= TLB_2_IL1D_MASK;
-    hw.data[2] =
-        set_bits_32(params->u, TLB_2_U_BIT_POS, TLB_2_U_BIT_LEN, hw.data[2]);
-    hw.data[2] = set_bits_32(params->wimg, TLB_2_WIMG_BIT_POS,
-                             TLB_2_WIMG_BIT_LEN, hw.data[2]);
-    if (params->en != 0)
-        hw.data[2] |= TLB_2_EN_MASK;
-    hw.data[2] = set_bits_32(params->uxwr, TLB_2_UXWR_BIT_POS,
-                             TLB_2_UXWR_BIT_LEN, hw.data[2]);
-    hw.data[2] = set_bits_32(params->sxwr, TLB_2_SXWR_BIT_POS,
-                             TLB_2_SXWR_BIT_LEN, hw.data[2]);
-
-    hw.tid = params->tid;
-    hw.bltd = bltd;
+    struct tlb_hw_record hw = {{
+        TLB_0_V_MASK | (params->epn<<TLB_0_EPN_BIT_POS) | (params->ts!=0?TLB_0_TS_MASK:0) |
+            (params->dsiz << TLB_0_DSIZ_BIT_POS),
+        (params->rpn<<TLB_1_RPN_BIT_POS) | (params->erpn<<TLB_1_ERPN_BIT_POS),
+        (params->il1i != 0?TLB_2_IL1I_MASK:0) | (params->il1d != 0?TLB_2_IL1D_MASK:0) |
+            (params->u<<TLB_2_U_BIT_POS) | (params->wimg<<TLB_2_WIMG_BIT_POS) |
+            (params->en != 0?TLB_2_EN_MASK:0) | (params->uxwr<<TLB_2_UXWR_BIT_POS) |
+            (params->sxwr<<TLB_2_SXWR_BIT_POS)},
+            params->tid,
+            bltd};
 
     ret = write_tlb(target, index_way, &hw);
     if (ret != ERROR_OK)
@@ -4192,13 +4154,14 @@ COMMAND_HANDLER(ppc476fp_code_dcread_command) {
         return ret;
     }
 
-    ret = read_gpr_reg(target, tmp_reg_data, (uint8_t*)&addr);
+    uint8_t data[4];
+    ret = read_gpr_reg(target, tmp_reg_data, data);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't read rt value from tmp reg");
         return ret;
     }
 
-    command_print_sameline(CMD, "%u", addr);
+    command_print_sameline(CMD, "%u", target_buffer_get_u32(target,data));
     return flush_registers(target);
 }
 
@@ -4314,8 +4277,8 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
                     LOG_ERROR("Can't run dcread R%i, R0, R%i", tmp_reg_data, tmp_reg_addr);
                     return ret;
                 }
-                uint32_t data;
-                ret = read_gpr_reg(target,tmp_reg_data,(uint8_t*)&data);
+                uint8_t data[4];
+                ret = read_gpr_reg(target,tmp_reg_data,data);
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't read data register");
                     return ret;
@@ -4335,7 +4298,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
                     command_print_sameline(CMD, " %02x:%i %03x:%08x", set,way,dcdbtrh&DCDBTRH_EXTADDR_MASK, (dcdbtrh&DCDBTRH_ADDR_MASK)|(set<<5));
 
                 }
-                command_print_sameline(CMD, " %08x", data);
+                command_print_sameline(CMD, " %08x", target_buffer_get_u32(target,data));
 
             }
 

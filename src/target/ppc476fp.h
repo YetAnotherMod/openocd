@@ -109,13 +109,14 @@ enum DCDBTRH{
 };
 
 static const uint32_t MMUCR_STID_MASK = (0xFFFF << 0);
-
-#define ALL_REG_COUNT 71
-#define GDB_REG_COUNT 71       /* at start of all register array */
-#define GEN_CACHE_REG_COUNT 38 /* R0-R31, PC, MSR, CR, LR, CTR, XER */
-#define FPU_CACHE_REG_COUNT 33 /* F0-F31, FPSCR */
-#define GPR_REG_COUNT 32
-#define FPR_REG_COUNT 32
+enum reg_counts{
+    ALL_REG_COUNT = 71,
+    GDB_REG_COUNT = 71,
+    GEN_CACHE_REG_COUNT = 38,
+    FPU_CACHE_REG_COUNT = 33,
+    GPR_REG_COUNT = 32,
+    FPR_REG_COUNT = 32,
+};
 
 #define PHYS_MEM_MAGIC_PID 0xEFCDu
 #define PHYS_MEM_BASE_ADDR 0x00000000u
@@ -128,48 +129,50 @@ static const uint32_t PHYS_MEM_TLB_INDEX_WAY =
 
 #define HW_BP_NUMBER 4
 #define WP_NUMBER 2
-#define TLB_NUMBER 1024
 
-static const uint32_t TLB_0_EPN_BIT_POS = 12;
-static const uint32_t TLB_0_EPN_BIT_LEN = 20;
-static const uint32_t TLB_0_V_MASK = BIT(11);
-static const uint32_t TLB_0_TS_MASK = BIT(10);
-static const uint32_t TLB_0_DSIZ_BIT_POS = 4;
-static const uint32_t TLB_0_DSIZ_BIT_LEN = 6;
-static const uint32_t TLB_0_BLTD_MASK = BIT(3);
+enum tlb_fields{
+    TLB_NUMBER = 1024,
+    TLB_0_EPN_BIT_POS = 12,
+    TLB_0_EPN_BIT_LEN = 20,
+    TLB_0_V_MASK = BIT(11),
+    TLB_0_TS_MASK = BIT(10),
+    TLB_0_DSIZ_BIT_POS = 4,
+    TLB_0_DSIZ_BIT_LEN = 6,
+    TLB_0_BLTD_MASK = BIT(3),
 
-static const uint32_t TLB_1_RPN_BIT_POS = 12;
-static const uint32_t TLB_1_RPN_BIT_LEN = 20;
-static const uint32_t TLB_1_ERPN_BIT_POS = 0;
-static const uint32_t TLB_1_ERPN_BIT_LEN = 10;
+    TLB_1_RPN_BIT_POS = 12,
+    TLB_1_RPN_BIT_LEN = 20,
+    TLB_1_ERPN_BIT_POS = 0,
+    TLB_1_ERPN_BIT_LEN = 10,
 
-static const uint32_t TLB_2_IL1I_MASK = BIT(17);
-static const uint32_t TLB_2_IL1D_MASK = BIT(16);
-static const uint32_t TLB_2_U_BIT_POS = 12;
-static const uint32_t TLB_2_U_BIT_LEN = 4;
-static const uint32_t TLB_2_WIMG_BIT_POS = 8;
-static const uint32_t TLB_2_WIMG_BIT_LEN = 4;
-static const uint32_t TLB_2_EN_MASK = BIT(7);
-static const uint32_t TLB_2_UXWR_BIT_POS = 3;
-static const uint32_t TLB_2_UXWR_BIT_LEN = 3;
-static const uint32_t TLB_2_SXWR_BIT_POS = 0;
-static const uint32_t TLB_2_SXWR_BIT_LEN = 3;
+    TLB_2_IL1I_MASK = BIT(17),
+    TLB_2_IL1D_MASK = BIT(16),
+    TLB_2_U_BIT_POS = 12,
+    TLB_2_U_BIT_LEN = 4,
+    TLB_2_WIMG_BIT_POS = 8,
+    TLB_2_WIMG_BIT_LEN = 4,
+    TLB_2_EN_MASK = BIT(7),
+    TLB_2_UXWR_BIT_POS = 3,
+    TLB_2_UXWR_BIT_LEN = 3,
+    TLB_2_SXWR_BIT_POS = 0,
+    TLB_2_SXWR_BIT_LEN = 3,
 
-static const uint32_t TLB_PARAMS_MASK_EPN = BIT(0);
-static const uint32_t TLB_PARAMS_MASK_RPN = BIT(1);
-static const uint32_t TLB_PARAMS_MASK_ERPN = BIT(2);
-static const uint32_t TLB_PARAMS_MASK_TID = BIT(3);
-static const uint32_t TLB_PARAMS_MASK_TS = BIT(4);
-static const uint32_t TLB_PARAMS_MASK_DSIZ = BIT(5);
-static const uint32_t TLB_PARAMS_MASK_WAY = BIT(6);
-static const uint32_t TLB_PARAMS_MASK_IL1I = BIT(7);
-static const uint32_t TLB_PARAMS_MASK_IL1D = BIT(8);
-static const uint32_t TLB_PARAMS_MASK_U = BIT(9);
-static const uint32_t TLB_PARAMS_MASK_WIMG = BIT(10);
-static const uint32_t TLB_PARAMS_MASK_EN = BIT(11);
-static const uint32_t TLB_PARAMS_MASK_UXWR = BIT(12);
-static const uint32_t TLB_PARAMS_MASK_SXWR = BIT(13);
-static const uint32_t TLB_PARAMS_MASK_BLTD = BIT(14);
+    TLB_PARAMS_MASK_EPN = BIT(0),
+    TLB_PARAMS_MASK_RPN = BIT(1),
+    TLB_PARAMS_MASK_ERPN = BIT(2),
+    TLB_PARAMS_MASK_TID = BIT(3),
+    TLB_PARAMS_MASK_TS = BIT(4),
+    TLB_PARAMS_MASK_DSIZ = BIT(5),
+    TLB_PARAMS_MASK_WAY = BIT(6),
+    TLB_PARAMS_MASK_IL1I = BIT(7),
+    TLB_PARAMS_MASK_IL1D = BIT(8),
+    TLB_PARAMS_MASK_U = BIT(9),
+    TLB_PARAMS_MASK_WIMG = BIT(10),
+    TLB_PARAMS_MASK_EN = BIT(11),
+    TLB_PARAMS_MASK_UXWR = BIT(12),
+    TLB_PARAMS_MASK_SXWR = BIT(13),
+    TLB_PARAMS_MASK_BLTD = BIT(14),
+};
 
 enum reg_numbers {
     reg_sp = 1,
@@ -204,6 +207,16 @@ enum jtag_instr {
 };
 
 enum reg_action { reg_action_error, reg_action_flush, reg_action_ignore };
+enum bltd{
+    bltd0 = 0,
+    bltd1 = 1,
+    bltd2 = 2,
+    bltd3 = 3,
+    bltd4 = 4,
+    bltd5 = 5,
+    bltd_no = 6,
+    bltd_auto = 7
+};
 
 struct tlb_hw_record {
     uint32_t
@@ -288,15 +301,6 @@ struct phys_mem_state {
 /// @param[in] len длина поля
 /// @return Значение искомого поля
 static inline uint32_t get_bits_32(uint32_t value, unsigned pos, unsigned len);
-
-/// @brief Установить значения поля в uint32_t
-/// @param[in] value значение поля, которое должно быть записано
-/// @param[in] pos положение младшего бита интересующего поля
-/// @param[in] len длина поля
-/// @param[in] src исходно слово
-/// @return результирующее слово
-static inline uint32_t set_bits_32(uint32_t value, unsigned pos, unsigned len,
-                                   uint32_t src);
 
 /// @brief Получить значение регистра (из кэша)
 /// @param[in] reg Указатель на регистр
