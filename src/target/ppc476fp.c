@@ -312,20 +312,20 @@ static int test_memory_at_addr(struct target *target, uint32_t ra, int16_t shift
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift+0, 4, (uint8_t *)&magic1);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift+0, memory_access_size_word, (uint8_t *)&magic1);
     if (ret != ERROR_OK)
         return ret;
-    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift+4, 4, (uint8_t *)&magic2);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift+4, memory_access_size_word, (uint8_t *)&magic2);
     if (ret != ERROR_OK)
         return ret;
 
-    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+0, 4, (uint8_t *)&value_1);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+0, memory_access_size_word, (uint8_t *)&value_1);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+4, 4, (uint8_t *)&value_2);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+4, memory_access_size_word, (uint8_t *)&value_2);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+0, 1, &endian);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift+0, memory_access_size_byte, &endian);
     if (ret != ERROR_OK)
         return ret;
 
@@ -499,16 +499,16 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     
-    ret = stuff_code(target, stfd(reg_num,tmp_reg_addr,shift));
+    ret = stuff_code(target, stfd(reg_num,ra,shift));
     if (ret != ERROR_OK)
         return ret;
 
     uint8_t *h = (endian == TARGET_BIG_ENDIAN?value_m:value_m+4);
     uint8_t *l = (endian == TARGET_BIG_ENDIAN?value_m+4:value_m);
-    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, h);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, memory_access_size_word, h);
     if (ret != ERROR_OK)
         return ret;
-    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, l);
+    ret = read_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, memory_access_size_word, l);
     if (ret != ERROR_OK)
         return ret;
 
@@ -549,10 +549,10 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value) {
 
     uint8_t *h = (endian == TARGET_BIG_ENDIAN?value_m:value_m+4);
     uint8_t *l = (endian == TARGET_BIG_ENDIAN?value_m+4:value_m);
-    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, 4, h);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 0, memory_access_size_word, h);
     if (ret != ERROR_OK)
         return ret;
-    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, 4, l);
+    ret = write_virt_mem_raw(target, tmp_reg_data, ra, shift + 4, memory_access_size_word, l);
     if (ret != ERROR_OK)
         return ret;
     ret = stuff_code(target, lfd(reg_num,ra,shift));
@@ -1258,15 +1258,15 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)bp->orig_instr);
+    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (uint8_t *)bp->orig_instr);
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (const uint8_t *)&TRAP_INSTRUCTION_CODE);
+    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (const uint8_t *)&TRAP_INSTRUCTION_CODE);
     if (ret != ERROR_OK)
         return ret;
 
-    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)&test_value);
+    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (uint8_t *)&test_value);
     if (ret != ERROR_OK)
         return ret;
 
@@ -1294,11 +1294,11 @@ static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)bp->orig_instr);
+    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (uint8_t *)bp->orig_instr);
     if (ret != ERROR_OK)
         return ret;
 
-    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_byte, (uint8_t *)&test_value);
+    ret = read_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (uint8_t *)&test_value);
     if (ret != ERROR_OK)
         return ret;
 
@@ -2935,8 +2935,10 @@ static int ppc476fp_add_breakpoint(struct target *target,
     if (target->state != TARGET_HALTED)
         return ERROR_TARGET_NOT_HALTED;
 
-    if (breakpoint->length != 4)
+    if (breakpoint->length != 4){
+        LOG_ERROR("incorrect bp length");
         return ERROR_TARGET_UNALIGNED_ACCESS;
+    }
 
     if ((breakpoint->address & 0x3) != 0)
         return ERROR_TARGET_UNALIGNED_ACCESS;
@@ -2946,7 +2948,7 @@ static int ppc476fp_add_breakpoint(struct target *target,
 
     if (breakpoint->type == BKPT_HARD) {
         int ret = check_add_hw_breakpoint(target, breakpoint);
-    if ( ret != ERROR_OK )
+        if ( ret != ERROR_OK )
             return ret;
     }
 
