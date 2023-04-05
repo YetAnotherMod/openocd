@@ -3266,6 +3266,10 @@ static int ppc476fp_mmu(struct target *target, int *enabled) {
     return ERROR_OK;
 }
 
+static const char *ppc476fp_get_gdb_arch(struct target *target){
+    return "powerpc:common";
+}
+
 static bool use_fpu_get(struct target *target) {
     return target_to_ppc476fp(target)->use_fpu;
 }
@@ -4695,6 +4699,7 @@ struct target_type ppc476fp_target = {
     .deassert_reset = ppc476fp_deassert_reset,
     .soft_reset_halt = ppc476fp_soft_reset_halt,
 
+    .get_gdb_arch = ppc476fp_get_gdb_arch,
     .get_gdb_reg_list = ppc476fp_get_gdb_reg_list,
 
     .read_memory = ppc476fp_read_memory,

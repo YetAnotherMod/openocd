@@ -1325,6 +1325,16 @@ static int ppc476fp_deassert_reset(struct target *target);
 static int ppc476fp_soft_reset_halt(struct target *target);
 
 /**
+ * @brief Возвращает название архитектуры
+ * @param[in] target Указатель на объект target
+ * @return Имя архитектуры
+ *
+ * Возвращает строку, которая в неизменном виде передаётся клиенту gdb для
+ * определения архитектуры таргета
+ */
+static const char *ppc476fp_get_gdb_arch(struct target *target);
+
+/**
  * @brief Список регистров, доступных для gdb
  * @param[in,out] target Указатель на объект target
  * @return ERROR_OK - успешно, иначе - код ошибки
