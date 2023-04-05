@@ -155,6 +155,7 @@ static int jtag_read_write_register(struct target *target,
     data_fields.out_value = data_out_buffer;
     data_fields.in_value = data_in_buffer;
     jtag_add_dr_scan(target->tap, 1, &data_fields, TAP_IDLE);
+    target_to_ppc476fp(target)->transactions++;
 
     // !!! IMPORTANT
     // make additional request with valid bit == 0
@@ -164,6 +165,7 @@ static int jtag_read_write_register(struct target *target,
         jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
         data_fields.out_value = (uint8_t *)zeros;
         jtag_add_dr_scan(target->tap, 1, &data_fields, TAP_IDLE);
+        target_to_ppc476fp(target)->transactions++;
     }
 
     ret = jtag_execute_queue();
@@ -1185,6 +1187,7 @@ static void build_reg_caches(struct target *target) {
     ppc476fp->use_stack = TARGET_ENDIAN_UNKNOWN;
     ppc476fp->use_static_mem = 0xffffffff;
     ppc476fp->use_static_mem_endianness = TARGET_ENDIAN_UNKNOWN;
+    ppc476fp->transactions = 0;
 }
 
 // установка аппаратной точки останова (предполагается, что она создана ранее)
@@ -2593,7 +2596,7 @@ static int handle_tlb_drop_all_command_internal(struct target *target) {
     return ERROR_OK;
 }
 
-static int ppc476fp_poll(struct target *target) {
+static int poll_internal(struct target *target) {
     enum target_state state;
     uint32_t JDSR_value, DBSR_value;
     int ret;
@@ -2647,6 +2650,14 @@ static int ppc476fp_poll(struct target *target) {
     }
 
     return ERROR_OK;
+}
+
+static int ppc476fp_poll(struct target *target) {
+    unsigned long long transactions_begin = target_to_ppc476fp(target)->transactions;
+    int ret = poll_internal(target);
+    LOG_DEBUG_IO("poll_transactions: %llu",target_to_ppc476fp(target)->transactions-transactions_begin);
+    target_to_ppc476fp(target)->transactions = transactions_begin;
+    return ret;
 }
 
 // call only then the target is halted
@@ -3536,6 +3547,7 @@ COMMAND_HANDLER(ppc476fp_handle_status_command) {
 
     command_print(CMD, "PowerPC JTAG status:");
     command_print(CMD, "  JDSR = 0x%08X", JDSR_value);
+    command_print(CMD, "  transaction_counter: %llu",--(target_to_ppc476fp(target)->transactions));
 
     return ERROR_OK;
 }

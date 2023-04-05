@@ -274,6 +274,7 @@ struct ppc476fp_common {
     uint32_t use_static_mem;
     enum target_endianness use_static_mem_endianness;
     bool memory_checked;
+    unsigned long long transactions;
 };
 
 struct ppc476fp_tap_ext {
