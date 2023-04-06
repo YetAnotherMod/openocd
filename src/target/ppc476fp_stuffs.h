@@ -17,6 +17,9 @@ enum stuff_codes{
     STUFF_CODE_ADDIS = 0x3c000000,
     STUFF_CODE_ADDI = 0x38000000,
     STUFF_CODE_ORI = 0x60000000,
+    // jump
+    STUFF_CODE_B = 0x48000000,
+    STUFF_CODE_BCLR = 0x4c000020,
     // spr/dcr
     STUFF_CODE_MTSPR = 0x7c0003a6,
     STUFF_CODE_MFSPR = 0x7c0002a6,
@@ -24,6 +27,8 @@ enum stuff_codes{
     STUFF_CODE_MFMSR = 0x7c0000a6,
     STUFF_CODE_MTDCRX = 0x7c000306,
     STUFF_CODE_MFDCRX = 0x7c000206,
+    STUFF_CODE_MTCRF = 0x7c000120,
+    STUFF_CODE_MFCR = 0x7c000026,
     // fpu
     STUFF_CODE_MTFSF = 0xfc00058e,
     STUFF_CODE_MFFS = 0xfc00048e,
@@ -174,3 +179,30 @@ static inline uint32_t lfd(uint32_t frt, uint32_t ra, int16_t d){
     return (((uint32_t)STUFF_CODE_LFD) | (frt<<21) | (ra<<16) | (uint16_t)d);
 }
 
+static inline uint32_t b(uint32_t li, uint32_t aa, uint32_t lk){
+    return (((uint32_t)STUFF_CODE_B) | (li<<2) | (aa<<1) | lk);
+}
+
+static inline uint32_t bl(uint32_t li){
+    return b(li,0,1);
+}
+
+static inline uint32_t bclr(uint32_t bo, uint32_t bi, uint32_t bh, uint32_t lk){
+    return (((uint32_t)STUFF_CODE_BCLR) | (bo<<21) | (bi<<16) | (bh<<11) | lk);
+}
+
+static inline uint32_t blr(void){
+    return bclr(0x14,0,0,0);
+}
+
+static inline uint32_t mtcrf(uint8_t fxm, uint32_t rs){
+    return (((uint32_t)STUFF_CODE_MTCRF) | (((uint32_t)fxm)<<12) | (rs<<21));
+}
+
+static inline uint32_t mtcr(uint32_t rs){
+    return mtcrf(0xff,rs);
+}
+
+static inline uint32_t mfcr(uint32_t rt){
+    return (((uint32_t)STUFF_CODE_MFCR) | (rt<<21));
+}

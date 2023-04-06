@@ -691,7 +691,7 @@ static int write_dirty_gen_regs(struct target *target) {
                             get_reg_value_32(ppc476fp->PC_reg));
         if (ret != ERROR_OK)
             return ret;
-        ret = stuff_code(target, 0x4E800020); // blr
+        ret = stuff_code(target, blr());
         if (ret != ERROR_OK)
             return ret;
         ppc476fp->PC_reg->dirty = false;
@@ -702,7 +702,7 @@ static int write_dirty_gen_regs(struct target *target) {
                             get_reg_value_32(ppc476fp->CR_reg));
         if (ret != ERROR_OK)
             return ret;
-        ret = stuff_code(target, 0x7C0FF120 | (tmp_reg_data << 21u)); // mtcr tmp_reg_data
+        ret = stuff_code(target, mtcr(tmp_reg_data));
         if (ret != ERROR_OK)
             return ret;
         ppc476fp->CR_reg->dirty = false;
@@ -809,8 +809,7 @@ static int read_required_gen_regs(struct target *target) {
     }
 
     if (!ppc476fp->CR_reg->valid) {
-        ret = stuff_code(target, 0x7C000026 |
-                                     (tmp_reg_data << 21)); // mfcr tmp_reg_data
+        ret = stuff_code(target, mfcr(tmp_reg_data));
         ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
         ppc476fp->current_gpr_values_valid[tmp_reg_data] = false;
         if (ret != ERROR_OK)
@@ -824,7 +823,7 @@ static int read_required_gen_regs(struct target *target) {
 
     if (!ppc476fp->PC_reg->valid) {
         ppc476fp->LR_reg->dirty = true;
-        ret = stuff_code(target, 0x48000001); // bl $+0
+        ret = stuff_code(target, bl(0));
         if (ret != ERROR_OK)
             return ret;
         ret = read_spr_reg(target, SPR_REG_NUM_LR, (uint8_t *)&value);
@@ -835,7 +834,7 @@ static int read_required_gen_regs(struct target *target) {
         ppc476fp->PC_reg->dirty = false;
     }
 
-    return flush_registers(target);
+    return write_dirty_gen_regs(target);
 }
 
 // Запись грязных (dirty) регистров FPU из кэша OpenOCD в таргет
