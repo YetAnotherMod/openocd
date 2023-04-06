@@ -275,6 +275,8 @@ struct ppc476fp_common {
     enum target_endianness use_static_mem_endianness;
     bool memory_checked;
     unsigned long long transactions;
+    uint32_t current_gpr_values[GPR_REG_COUNT];
+    uint32_t current_gpr_values_valid[GPR_REG_COUNT];
 };
 
 struct ppc476fp_tap_ext {

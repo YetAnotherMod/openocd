@@ -253,11 +253,20 @@ static int stuff_code(struct target *target, uint32_t code) {
 // чтение РОН через JTAG. Значение РОН при этом не меняется, но обычно
 // происходит после инструкций, изменяющих значене регистра
 static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data) {
+    struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
     int ret = stuff_code(target, mtspr(SPR_REG_NUM_DBDR,reg_num));
     if (ret != ERROR_OK)
         return ret;
 
-    return read_DBDR(target, data);
+    ret = read_DBDR(target, data);
+    if ( ret != ERROR_OK ){
+        ppc476fp->current_gpr_values_valid[reg_num] = false;
+        return ret;
+    }
+    ppc476fp->current_gpr_values[reg_num] = buf_get_u32(data,0,32);
+    ppc476fp->current_gpr_values_valid[reg_num] = true;
+
+    return ERROR_OK;
 }
 
 // запись РОН через JTAG. Никак не связано с управляющими командами от GDB,
@@ -266,19 +275,29 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data) {
 // значение на эталонное при снятии halt
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data) {
     int32_t data_signed = data;
+    struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
     int ret = ERROR_OK;
-    if ((data_signed < -32768) || (data_signed >= 32768)) {
+    ppc476fp->gpr_regs[reg_num]->dirty = true;
+    if ( ppc476fp->current_gpr_values_valid[reg_num] ){
+            if ( data != ppc476fp->current_gpr_values[reg_num] ){
+            int32_t diff = ppc476fp->current_gpr_values[reg_num] - data;
+            int16_t diff_16 = (uint16_t)((uint32_t)diff);
+            if(diff_16 == diff){
+                ret = stuff_code (target,addi(reg_num,reg_num,diff_16));
+            }
+        }
+    } else if ((data_signed < -32768) || (data_signed >= 32768)) {
         ret = stuff_code(target, lis(reg_num, data>>16));
         if (ret != ERROR_OK) {
-            return ret;
-        }
-        if (data & 0xffffu) {
+            ppc476fp->current_gpr_values_valid[reg_num] = false;
+        }else if (data & 0xffffu) {
             ret = stuff_code(target, ori(reg_num,reg_num,data&0xffffu));
         }
     } else {
         ret = stuff_code(target, li(reg_num,data_signed));
     }
-    target_to_ppc476fp(target)->gpr_regs[reg_num]->dirty = true;
+
+    ppc476fp->current_gpr_values_valid[reg_num] = (ret == ERROR_OK);
 
     return ret;
 }
@@ -416,6 +435,7 @@ static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, in
         assert(false);
     }
     target_to_ppc476fp(target)->gpr_regs[rt]->dirty = true;
+    target_to_ppc476fp(target)->current_gpr_values_valid[rt] = false;
 
     ret = stuff_code(target, code);
     if (ret != ERROR_OK)
@@ -935,6 +955,9 @@ static void invalidate_regs_status(struct target *target) {
     while (cache != NULL) {
         register_cache_invalidate(cache);
         cache = cache->next;
+    }
+    for ( int i = 0 ; i < GPR_REG_COUNT ; ++i ){
+        target_to_ppc476fp(target)->current_gpr_values_valid[i] = false;
     }
 }
 
