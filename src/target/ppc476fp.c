@@ -275,28 +275,34 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data) {
 // значение на эталонное при снятии halt
 static int write_gpr_reg(struct target *target, int reg_num, uint32_t data) {
     int32_t data_signed = data;
+    bool need_full_write = true;
     struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
     int ret = ERROR_OK;
     ppc476fp->gpr_regs[reg_num]->dirty = true;
     if ( ppc476fp->current_gpr_values_valid[reg_num] ){
-            if ( data != ppc476fp->current_gpr_values[reg_num] ){
-            int32_t diff = ppc476fp->current_gpr_values[reg_num] - data;
+        if ( data == ppc476fp->current_gpr_values[reg_num] ){
+            need_full_write = false;
+        }else{
+            int32_t diff = data - ppc476fp->current_gpr_values[reg_num];
             int16_t diff_16 = (uint16_t)((uint32_t)diff);
             if(diff_16 == diff){
+                need_full_write = false;
                 ret = stuff_code (target,addi(reg_num,reg_num,diff_16));
             }
         }
-    } else if ((data_signed < -32768) || (data_signed >= 32768)) {
-        ret = stuff_code(target, lis(reg_num, data>>16));
-        if (ret != ERROR_OK) {
-            ppc476fp->current_gpr_values_valid[reg_num] = false;
-        }else if (data & 0xffffu) {
-            ret = stuff_code(target, ori(reg_num,reg_num,data&0xffffu));
+    }
+    if (need_full_write){
+        if ((data_signed < -32768) || (data_signed >= 32768)) {
+            ret = stuff_code(target, lis(reg_num, data>>16));
+            if ((ret == ERROR_OK) && (data & 0xffffu)) {
+                ret = stuff_code(target, ori(reg_num,reg_num,data&0xffffu));
+            }
+        } else {
+            ret = stuff_code(target, li(reg_num,data_signed));
         }
-    } else {
-        ret = stuff_code(target, li(reg_num,data_signed));
     }
 
+    ppc476fp->current_gpr_values[reg_num] = data;
     ppc476fp->current_gpr_values_valid[reg_num] = (ret == ERROR_OK);
 
     return ret;
@@ -806,6 +812,7 @@ static int read_required_gen_regs(struct target *target) {
         ret = stuff_code(target, 0x7C000026 |
                                      (tmp_reg_data << 21)); // mfcr tmp_reg_data
         ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
+        ppc476fp->current_gpr_values_valid[tmp_reg_data] = false;
         if (ret != ERROR_OK)
             return ret;
         ret = read_gpr_reg(target, tmp_reg_data, ppc476fp->CR_reg->value);
@@ -1817,6 +1824,7 @@ static int load_tlb(struct target *target, int index_way,
 
     ret = stuff_code(target, tlbre(tmp_reg_data, tmp_reg_addr, 0));
     target_to_ppc476fp(target)->gpr_regs[tmp_reg_data]->dirty = true;
+    target_to_ppc476fp(target)->current_gpr_values_valid[tmp_reg_data] = false;
     if (ret != ERROR_OK)
         return ret;
     ret = read_gpr_reg(target, tmp_reg_data, (uint8_t *)&hw->data[0]);
@@ -1828,6 +1836,7 @@ static int load_tlb(struct target *target, int index_way,
         return ERROR_OK;
 
     ret = stuff_code(target, tlbre(tmp_reg_data, tmp_reg_addr, 1));
+    target_to_ppc476fp(target)->current_gpr_values_valid[tmp_reg_data] = false;
     if (ret != ERROR_OK)
         return ret;
 
@@ -1836,6 +1845,7 @@ static int load_tlb(struct target *target, int index_way,
         return ret;
 
     ret = stuff_code(target, tlbre(tmp_reg_data, tmp_reg_addr, 2));
+    target_to_ppc476fp(target)->current_gpr_values_valid[tmp_reg_data] = false;
     if (ret != ERROR_OK)
         return ret;
     ret = read_gpr_reg(target, tmp_reg_data, (uint8_t *)&hw->data[2]);
@@ -4314,6 +4324,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
                 }
 
                 ret = stuff_code(target, dcread(tmp_reg_data,0,tmp_reg_addr) );
+                target_to_ppc476fp(target)->current_gpr_values_valid[tmp_reg_data] = false;
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't run dcread R%i, R0, R%i", tmp_reg_data, tmp_reg_addr);
                     return ret;
