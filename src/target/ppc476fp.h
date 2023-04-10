@@ -65,6 +65,13 @@ enum SPR_REG_NUM {
     SPR_REG_NUM_MMUBE0 = 820,
     SPR_REG_NUM_MMUBE1 = 821,
     SPR_REG_NUM_DBDR = 1011,
+    SPR_REG_NUM_DCRIPR = 891,
+};
+
+enum DCR_bits {
+    DCRIPR_MASK = 0xfffffc00,
+    DCR_LSB_MASK = 0x3ff,
+    DCR_L2_BASE_ADDR = 0x80000600,
 };
 
 enum DBCR_bits {

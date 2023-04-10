@@ -1,5 +1,8 @@
 #include <stdint.h>
 
+#ifndef __PPC476FP_STUFFS_H__
+#define __PPC476FP_STUFFS_H__
+
 enum stuff_codes{
     // tlb
     STUFF_CODE_TLBRE = 0x7c000764,
@@ -29,6 +32,8 @@ enum stuff_codes{
     STUFF_CODE_MFDCRX = 0x7c000206,
     STUFF_CODE_MTCRF = 0x7c000120,
     STUFF_CODE_MFCR = 0x7c000026,
+    STUFF_CODE_MTDCR = 0x7c000386,
+    STUFF_CODE_MFDCR = 0x7c000286,
     // fpu
     STUFF_CODE_MTFSF = 0xfc00058e,
     STUFF_CODE_MFFS = 0xfc00048e,
@@ -44,6 +49,10 @@ enum stuff_codes{
     STUFF_CODE_ISYNC = 0x4c00012c,
     STUFF_CODE_MSYNC = 0x7c0004ac,
 };
+
+static inline uint32_t reg_num_10_bits (uint32_t reg_num){
+    return ((reg_num&0x1f)<<5) | ((reg_num>>5)&0x1f);   
+}
 
 static inline uint32_t lwz (uint32_t rt, uint32_t ra, int16_t d){
     return (((uint32_t)STUFF_CODE_LWZ) | (rt<<21) | (ra << 16) | ((uint16_t)d));
@@ -126,13 +135,11 @@ static inline uint32_t icbt(uint32_t ra, uint32_t rb){
 }
 
 static inline uint32_t mtspr(uint32_t spr_n, uint32_t rs){
-    uint32_t spr = ((spr_n&0x1f)<<5) | ((spr_n>>5)&0x1f);
-    return (((uint32_t)STUFF_CODE_MTSPR) | (rs<<21) | (spr<<11));
+    return (((uint32_t)STUFF_CODE_MTSPR) | (rs<<21) | (reg_num_10_bits(spr_n)<<11));
 }
 
 static inline uint32_t mfspr(uint32_t rt, uint32_t spr_n){
-    uint32_t spr = ((spr_n&0x1f)<<5) | ((spr_n>>5)&0x1f);
-    return (((uint32_t)STUFF_CODE_MFSPR) | (rt<<21) | (spr<<11));
+    return (((uint32_t)STUFF_CODE_MFSPR) | (rt<<21) | (reg_num_10_bits(spr_n)<<11));
 }
 
 static inline uint32_t mtmsr(uint32_t rs, uint32_t l){
@@ -206,3 +213,13 @@ static inline uint32_t mtcr(uint32_t rs){
 static inline uint32_t mfcr(uint32_t rt){
     return (((uint32_t)STUFF_CODE_MFCR) | (rt<<21));
 }
+
+static inline uint32_t mtdcr(uint32_t dcrn, uint32_t rs){
+    return (((uint32_t)STUFF_CODE_MTDCR) | (rs<<21) | (reg_num_10_bits(dcrn)<<11));
+}
+
+static inline uint32_t mfdcr(uint32_t rt, uint32_t dcrn){
+    return (((uint32_t)STUFF_CODE_MFDCR) | (rt<<21) | (reg_num_10_bits(dcrn)<<11));
+}
+
+#endif // __PPC476FP_STUFFS_H__

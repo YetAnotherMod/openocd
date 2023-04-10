@@ -3,6 +3,7 @@
 #endif
 
 #include "ppc476fp_stuffs.h"
+#include "ppc476fp_l2.h"
 
 #include "ppc476fp.h"
 
@@ -4316,6 +4317,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
         for ( uint32_t way = 0 ; way < 4 ; ++way ){
             uint32_t dcdbtrh;
             for ( uint32_t i = 0 ; i < 8 ; ++i ){
+                keep_alive();
                 int ret = write_gpr_reg(target, tmp_reg_addr, way * 0x2000 + set * 0x20 + i * 4);
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't write addr to tmp reg");
@@ -4375,6 +4377,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
         for ( uint32_t way = 0 ; way < 4 ; ++way ){
             uint32_t icdbtrh;
             for ( uint32_t i = 0 ; i < 8 ; ++i ){
+                keep_alive();
                 int ret = write_gpr_reg(target, tmp_reg_addr, way * 0x2000 + set * 0x20 + i*4);
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't write addr to tmp reg");
@@ -4420,6 +4423,90 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
         }
     }
     return flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_cache_l2_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    struct target *target = get_current_target(CMD_CTX);
+    struct l2_context context;
+    int ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data);
+    if (ret==ERROR_OK){
+        command_print_sameline(CMD, "Cache size: ");
+        switch (context.size)
+        {
+        case l2_size_128k:
+            command_print(CMD,"128k");
+            break;
+        case l2_size_256k:
+            command_print(CMD,"256k");
+            break;
+        case l2_size_512k:
+            command_print(CMD,"512k");
+            break;
+        case l2_size_1m:
+            command_print(CMD,"1m");
+            break;
+        }
+        keep_alive();
+        for (uint32_t set=0;set<(1u<<context.tag_n);++set){
+            uint32_t info,ecc;
+            for (uint32_t way = 0 ; way<4 ; ++way){
+                ret = l2_read_tag(&context,set,way,&info,&ecc);
+                if (ret != ERROR_OK){
+                    LOG_ERROR("Can't read tag %i",set);
+                    break;
+                }
+                enum l2_cache_state line_state = info&l2_cache_state_mask;
+                bool valid = true;
+                uint32_t eaddr = (info>>19)&0x3ff;
+                uint32_t addr = (info<<13)|(set<<7);
+                switch (line_state){
+                case l2_cache_state_shared:
+                    command_print(CMD,"Set %4i way %i: %08x, %02x S  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    break;
+                case l2_cache_state_shared_last:
+                    command_print(CMD,"Set %4i way %i: %08x, %02x SL addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    break;
+                case l2_cache_state_exclusive:
+                    command_print(CMD,"Set %4i way %i: %08x, %02x E  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    break;
+                case l2_cache_state_tagged:
+                    command_print(CMD,"Set %4i way %i: %08x, %02x T  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    break;
+                case l2_cache_state_modified:
+                    command_print(CMD,"Set %4i way %i: %08x, %02x M  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    break;
+                case l2_cache_state_modified_unsolicited:
+                    command_print(CMD,"Set %4i way %i: %08x, %02x MU addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    break;
+                case l2_cache_state_invalid:
+                case l2_cache_state_undefined:
+                    valid = false;
+                    break;
+                }
+                if (valid){
+                    for(uint32_t i=0;i<16;++i){
+                        keep_alive();
+                        uint32_t data_h,data_l,data_ecc;
+                        if(i%8==0)
+                           command_print_sameline(CMD,"                                                    ");
+                        l2_read_data(&context,set*16+i,way,&data_h,&data_l,&data_ecc);
+                        command_print_sameline(CMD," %08x:%08x:%x", target_buffer_get_u32(target,(uint8_t*)&data_h), target_buffer_get_u32(target,(uint8_t*)&data_l), data_ecc);
+                        if(i%8==7)
+                            command_print(CMD," ");
+                    }
+                }else{
+                    keep_alive();
+                }
+            }
+        }
+        l2_restore_context(&context);
+    }else{
+        command_print(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
 }
 
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
@@ -4653,6 +4740,11 @@ static const struct command_registration ppc476fp_cache_exec_command_handlers[] 
     .mode = COMMAND_EXEC,
     .usage = "",
     .help = "Dump valid l1i entryes"},
+    {.name = "l2",
+    .handler = ppc476fp_cache_l2_command,
+    .mode = COMMAND_EXEC,
+    .usage = "",
+    .help = "Dump valid l2 entryes"},
     COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration ppc476fp_exec_command_handlers[] = {
