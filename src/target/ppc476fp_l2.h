@@ -299,12 +299,16 @@ static inline int l2_read_tag(struct l2_context *context, uint32_t tag_addr, uin
     ret = l2_arracc_read(context,tag_addr<<1,l2_arraccctl_bid_tag|(cache_way<<l2_arraccctl_way_ind));
     if(ret!=ERROR_OK)
         return ret;
-    ret = l2_read(context,L2C_L2ARRACCDO0, tag_info);
-    if(ret!=ERROR_OK)
-        return ret;
-    ret = l2_read(context,L2C_L2ARRACCDO2, tag_ecc);
-    if(ret!=ERROR_OK)
-        return ret;
+    if (tag_info){
+        ret = l2_read(context,L2C_L2ARRACCDO0, tag_info);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
+    if (tag_ecc){
+        ret = l2_read(context,L2C_L2ARRACCDO2, tag_ecc);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
     return ret;
 }
 
@@ -313,15 +317,21 @@ static inline int l2_read_data(struct l2_context *context, uint32_t data_addr, u
     ret = l2_arracc_read(context,data_addr>>3,l2_arraccctl_bid_data|(cache_way<<l2_arraccctl_way_ind)|(0x80>>(data_addr&0x7)));
     if(ret!=ERROR_OK)
         return ret;
-    ret = l2_read(context,L2C_L2ARRACCDO0, data_h);
-    if(ret!=ERROR_OK)
-        return ret;
-    ret = l2_read(context,L2C_L2ARRACCDO1, data_l);
-    if(ret!=ERROR_OK)
-        return ret;
-    ret = l2_read(context,L2C_L2ARRACCDO2, data_ecc);
-    if(ret!=ERROR_OK)
-        return ret;
+    if (data_h){
+        ret = l2_read(context,L2C_L2ARRACCDO0, data_h);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
+    if(data_l){
+        ret = l2_read(context,L2C_L2ARRACCDO1, data_l);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
+    if(data_ecc){
+        ret = l2_read(context,L2C_L2ARRACCDO2, data_ecc);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
     return ret;
 }
 

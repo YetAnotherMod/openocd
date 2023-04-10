@@ -4426,8 +4426,15 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
 }
 
 COMMAND_HANDLER(ppc476fp_cache_l2_command) {
-    if (CMD_ARGC != 0)
-        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t ecc_data=0;
+    uint32_t *ecc=NULL;
+    if (CMD_ARGC != 0){
+        if ((CMD_ARGC==1) && (strcmp(CMD_ARGV[0],"ecc")==0)){
+            ecc = &ecc_data;
+        }else{
+            return ERROR_COMMAND_SYNTAX_ERROR;
+        }
+    }
 
     struct target *target = get_current_target(CMD_CTX);
     struct l2_context context;
@@ -4451,9 +4458,9 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
         }
         keep_alive();
         for (uint32_t set=0;set<(1u<<context.tag_n);++set){
-            uint32_t info,ecc;
+            uint32_t info;
             for (uint32_t way = 0 ; way<4 ; ++way){
-                ret = l2_read_tag(&context,set,way,&info,&ecc);
+                ret = l2_read_tag(&context,set,way,&info,ecc);
                 if (ret != ERROR_OK){
                     LOG_ERROR("Can't read tag %i",set);
                     break;
@@ -4464,22 +4471,22 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
                 uint32_t addr = (info<<13)|(set<<7);
                 switch (line_state){
                 case l2_cache_state_shared:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x S  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    command_print(CMD,"Set %4i way %i: %08x, %02x S  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
                     break;
                 case l2_cache_state_shared_last:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x SL addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    command_print(CMD,"Set %4i way %i: %08x, %02x SL addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
                     break;
                 case l2_cache_state_exclusive:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x E  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    command_print(CMD,"Set %4i way %i: %08x, %02x E  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
                     break;
                 case l2_cache_state_tagged:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x T  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    command_print(CMD,"Set %4i way %i: %08x, %02x T  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
                     break;
                 case l2_cache_state_modified:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x M  addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    command_print(CMD,"Set %4i way %i: %08x, %02x M  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
                     break;
                 case l2_cache_state_modified_unsolicited:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x MU addr: %03x:%08x:",set,way,info,ecc>>1,eaddr,addr);
+                    command_print(CMD,"Set %4i way %i: %08x, %02x MU addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
                     break;
                 case l2_cache_state_invalid:
                 case l2_cache_state_undefined:
@@ -4489,11 +4496,11 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
                 if (valid){
                     for(uint32_t i=0;i<16;++i){
                         keep_alive();
-                        uint32_t data_h,data_l,data_ecc;
+                        uint32_t data_h,data_l;
                         if(i%8==0)
                            command_print_sameline(CMD,"                                                    ");
-                        l2_read_data(&context,set*16+i,way,&data_h,&data_l,&data_ecc);
-                        command_print_sameline(CMD," %08x:%08x:%x", target_buffer_get_u32(target,(uint8_t*)&data_h), target_buffer_get_u32(target,(uint8_t*)&data_l), data_ecc);
+                        l2_read_data(&context,set*16+i,way,&data_h,&data_l,ecc);
+                        command_print_sameline(CMD," %08x:%08x:%x", target_buffer_get_u32(target,(uint8_t*)&data_h), target_buffer_get_u32(target,(uint8_t*)&data_l), ecc_data);
                         if(i%8==7)
                             command_print(CMD," ");
                     }
@@ -4743,7 +4750,7 @@ static const struct command_registration ppc476fp_cache_exec_command_handlers[] 
     {.name = "l2",
     .handler = ppc476fp_cache_l2_command,
     .mode = COMMAND_EXEC,
-    .usage = "",
+    .usage = "[ecc]",
     .help = "Dump valid l2 entryes"},
     COMMAND_REGISTRATION_DONE};
 
