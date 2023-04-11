@@ -48,6 +48,8 @@ enum stuff_codes{
     STUFF_CODE_STB = 0x98000000,
     STUFF_CODE_ISYNC = 0x4c00012c,
     STUFF_CODE_MSYNC = 0x7c0004ac,
+    // trap
+    STUFF_CODE_TW = 0x7c000008,
 };
 
 static inline uint32_t reg_num_10_bits (uint32_t reg_num){
@@ -220,6 +222,14 @@ static inline uint32_t mtdcr(uint32_t dcrn, uint32_t rs){
 
 static inline uint32_t mfdcr(uint32_t rt, uint32_t dcrn){
     return (((uint32_t)STUFF_CODE_MFDCR) | (rt<<21) | (reg_num_10_bits(dcrn)<<11));
+}
+
+static inline uint32_t tw(uint32_t to, uint32_t ra, uint32_t rb){
+    return (((uint32_t)STUFF_CODE_TW) | (to<<21) | (ra<<16) | (rb<<11));
+}
+
+static inline uint32_t trap(void){
+    return tw(31,0,0);
 }
 
 #endif // __PPC476FP_STUFFS_H__

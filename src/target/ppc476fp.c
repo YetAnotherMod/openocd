@@ -1285,7 +1285,9 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     int ret;
     uint32_t test_value;
 
-    static const uint32_t TRAP_INSTRUCTION_CODE = 0x0800e07f;
+    uint32_t trap_code = 0;
+    target_buffer_set_u32(target,(uint8_t *)&trap_code,trap());
+
 
     ret = write_gpr_reg(target,tmp_reg_addr,(uint32_t)bp->address);
     if (ret != ERROR_OK)
@@ -1295,7 +1297,7 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (const uint8_t *)&TRAP_INSTRUCTION_CODE);
+    ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, 0, memory_access_size_word, (const uint8_t *)&trap_code);
     if (ret != ERROR_OK)
         return ret;
 
@@ -1307,7 +1309,7 @@ static int set_soft_breakpoint(struct target *target, struct breakpoint *bp) {
     if (ret != ERROR_OK)
         return ret;
 
-    if (test_value == TRAP_INSTRUCTION_CODE)
+    if (test_value == trap_code)
         bp->is_set = 1;
     else
         LOG_WARNING("soft breakpoint cannot be set at address 0x%08X",
