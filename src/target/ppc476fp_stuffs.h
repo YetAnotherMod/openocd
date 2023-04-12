@@ -7,6 +7,7 @@ enum stuff_codes{
     // tlb
     STUFF_CODE_TLBRE = 0x7c000764,
     STUFF_CODE_TLBWE = 0x7c0007a4,
+    STUFF_CODE_TLBSX = 0x7c000724,
     // cache
     STUFF_CODE_ICBI = 0x7c0007ac,
     STUFF_CODE_ICBT = 0x7c00002c,
@@ -230,6 +231,15 @@ static inline uint32_t tw(uint32_t to, uint32_t ra, uint32_t rb){
 
 static inline uint32_t trap(void){
     return tw(31,0,0);
+}
+
+static inline uint32_t tlbsx(uint32_t rt, uint32_t ra, uint32_t rb){
+    return (((uint32_t)STUFF_CODE_TLBSX)|(rt<<21)|(ra<<16)|(rb<<11));
+}
+
+// tlbsx.
+static inline uint32_t tlbsx_(uint32_t rt, uint32_t ra, uint32_t rb){
+    return (((uint32_t)STUFF_CODE_TLBSX)|(rt<<21)|(ra<<16)|(rb<<11)|1u);
 }
 
 #endif // __PPC476FP_STUFFS_H__

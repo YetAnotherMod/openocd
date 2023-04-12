@@ -3143,9 +3143,56 @@ static int ppc476fp_virt2phys(struct target *target, target_addr_t address,
                               target_addr_t *physical) {
     LOG_DEBUG("coreid=%i", target->coreid);
 
-    *physical = 0;
-
-    return ERROR_TARGET_TRANSLATION_FAULT;
+    if (target->state!=TARGET_HALTED){
+        *physical = 0;
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    int ret = ERROR_OK;
+    uint32_t ispcr_saved = 0, ispcr=0;
+    do{
+        struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+        uint32_t index,cr;
+        ret =read_spr_reg(target,SPR_REG_NUM_ISPCR,(uint8_t*)&ispcr_saved);
+        if(ret!=ERROR_OK)
+            break;
+        ret =read_spr_reg(target,((get_reg_value_32(ppc476fp->MSR_reg)&MSR_PR_MASK)!=0)?SPR_REG_NUM_USPCR:SPR_REG_NUM_SSPCR,(uint8_t*)&ispcr);
+        if(ret!=ERROR_OK)
+            break;
+        ret = write_gpr_reg(target,tmp_reg_addr,(uint32_t)address);
+        if(ret!=ERROR_OK)
+            break;
+        ppc476fp->CR_reg->dirty = true;
+        ppc476fp->gpr_regs[tmp_reg_data]->dirty = true;
+        ppc476fp->current_gpr_values_valid[tmp_reg_data] = false;
+        ret = stuff_code(target,tlbsx_(tmp_reg_data,0,tmp_reg_addr));
+        if(ret!=ERROR_OK)
+            break;
+        ret = read_gpr_reg(target,tmp_reg_data,(uint8_t*)&index);
+        if(ret!=ERROR_OK)
+            break;
+        ret = stuff_code(target,mfcr(tmp_reg_data));
+        if(ret!=ERROR_OK)
+            break;
+        ret = read_gpr_reg(target,tmp_reg_data,(uint8_t*)&cr);
+        if(ret!=ERROR_OK)
+            break;
+        if((cr&1u<<(31-2))==0){
+            ret = ERROR_TARGET_TRANSLATION_FAULT;
+            break;
+        }
+        index = ((index>>16)&0xff)*4+(index>>29);
+        ret = load_uncached_tlb(target, index);
+        if(ret!=ERROR_OK)
+            break;
+        target_addr_t result = ppc476fp->tlb_cache[index].hw.data[1]&0x3ffu;
+        result <<= 32;
+        result |= (ppc476fp->tlb_cache[index].hw.data[0]&0xfffff000u)^address^(ppc476fp->tlb_cache[index].hw.data[1]&0xfffff000u);
+        *physical = result;
+    }while(0);
+    if(ispcr!=0){
+        ret |= write_spr_reg(target,SPR_REG_NUM_ISPCR,ispcr_saved);
+    }
+    return ret | flush_registers(target);
 }
 
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
