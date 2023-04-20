@@ -9,6 +9,20 @@
 
 #include <helper/log.h>
 
+static bool is_halted(uint32_t jdsr){
+    if ((jdsr&JDSR_DWE_MASK)!=0){
+        if ((jdsr & (JDSR_UDE_MASK | JDSR_DE_MASK)))
+            return true;
+        else
+            return false;
+    }else{
+        if ((jdsr & JDSR_PSP_MASK) != 0)
+            return true;
+        else
+            return false;
+    }
+}
+
 static int flush_registers(struct target* target){
     int ret = ERROR_OK;
     if ( use_fpu_get(target) ){
@@ -35,7 +49,7 @@ static int jdsr_log_ser(uint32_t JDSR){
         ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     if (JDSR & JDSR_ISE_MASK){
-        LOG_ERROR("Instruction storage exception");
+        LOG_DEBUG("Instruction storage exception");
     }
     if (JDSR & JDSR_DTM_MASK){
         LOG_ERROR("Data TLB miss exception");
@@ -46,7 +60,7 @@ static int jdsr_log_ser(uint32_t JDSR){
         ret = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     if (JDSR & JDSR_RMCE_MASK){
-        LOG_ERROR("Return from machine check exception");
+        LOG_DEBUG("Return from machine check exception");
     }
     if (JDSR & JDSR_DSE_MASK){
         LOG_ERROR("Data storage exception");
@@ -61,13 +75,13 @@ static int jdsr_log_ser(uint32_t JDSR){
         ret = ERROR_TARGET_TRANSLATION_FAULT;
     }
     if (JDSR & JDSR_SC_MASK){
-        LOG_ERROR("System call");
+        LOG_DEBUG("System call");
     }
     if (JDSR & JDSR_RFI_MASK){
-        LOG_ERROR("Return from interrupt");
+        LOG_DEBUG("Return from interrupt");
     }
     if (JDSR & JDSR_RCFI_MASK){
-        LOG_ERROR("Return from critical interrupt");
+        LOG_DEBUG("Return from critical interrupt");
     }
     if (JDSR & JDSR_IMC_MASK){
         LOG_ERROR("Instruction-side machine check");
@@ -604,12 +618,6 @@ static int write_DBCR0(struct target *target, uint32_t data) {
     ppc476fp->DBCR0_value = data;
 
     return ERROR_OK;
-}
-
-// очистка регистра DBSR. Подробнее: PowerPC 476FP Embedded Processor Core
-// User’s Manual 8.5.4 с. 239
-static int clear_DBSR(struct target *target) {
-    return write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
 }
 
 // запись MSR.Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual
@@ -1653,10 +1661,6 @@ static int restore_state_before_run(struct target *target, int current,
     if (ret != ERROR_OK)
         return ret;
 
-    ret = clear_DBSR(target);
-    if (ret != ERROR_OK)
-        return ret;
-
     return ERROR_OK;
 }
 
@@ -1669,7 +1673,7 @@ static int save_state_and_init_debug(struct target *target) {
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_TRAP_MASK | DBCR0_FT_MASK);
+    ret = write_DBCR0(target, (target_to_ppc476fp(target)->DWE?0:DBCR0_EDM_MASK) | DBCR0_TRAP_MASK | DBCR0_FT_MASK);
     if (ret != ERROR_OK)
         return ret;
     invalidate_hw_breakpoints(target);
@@ -1686,6 +1690,7 @@ static int save_state_and_init_debug(struct target *target) {
 }
 
 static int reset_and_halt(struct target *target) {
+    target_to_ppc476fp(target)->DWE = false;
     int ret = halt_and_wait(target, 100);
 
     if ( ret != ERROR_OK ){
@@ -1693,11 +1698,17 @@ static int reset_and_halt(struct target *target) {
         ret = write_JDCR(target, JDCR_RESET_SYS | JDCR_STO_MASK);
         if (ret != ERROR_OK)
             return ret;
-
-        ret = halt_and_wait(target, 100);
-        if (ret != ERROR_OK)
-            return ret;
+        target->state = TARGET_HALTED;
     }
+    ret = write_spr_reg(target, SPR_REG_NUM_SRR1, 0);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = write_spr_reg(target, SPR_REG_NUM_CSRR1, 0);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = write_spr_reg(target, SPR_REG_NUM_MCSRR1, 0);
+    if (ret != ERROR_OK)
+        return ret;
     unset_all_soft_breakpoints(target); // ignore return value
     write_DBCR0(target, 0);
 
@@ -1708,8 +1719,7 @@ static int reset_and_halt(struct target *target) {
     use_fpu_off(target, reg_action_ignore);
     use_stack_off(target, reg_action_ignore);
     use_static_mem_off(target, reg_action_ignore);
-
-    ret = write_JDCR(target, JDCR_RESET_CHIP | JDCR_STO_MASK);
+    ret = write_JDCR(target, JDCR_RESET_CHIP | JDCR_STO_MASK | JDCR_RSDBSR_MASK);
     if (ret != ERROR_OK)
         return ret;
 
@@ -2642,7 +2652,9 @@ static int poll_internal(struct target *target) {
         return ret;
     }
 
-    if ((JDSR_value & JDSR_PSP_MASK) != 0)
+    target_to_ppc476fp(target)->DWE = (JDSR_value&JDSR_DWE_MASK)!=0;
+    
+    if (is_halted(JDSR_value))
         state = TARGET_HALTED;
     else
         state = TARGET_RUNNING;
@@ -2699,16 +2711,22 @@ static int ppc476fp_poll(struct target *target) {
 static int ppc476fp_arch_state(struct target *target) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 
-    LOG_USER("target halted due to %s, coreid=%i, PC: 0x%08X",
+    LOG_USER("target halted due to %s, coreid=%i, PC: 0x%08X, DW %s",
              debug_reason_name(target), target->coreid,
-             get_reg_value_32(ppc476fp->PC_reg));
+             get_reg_value_32(ppc476fp->PC_reg), (ppc476fp->DWE?"enabled":"disabled"));
 
     return ERROR_OK;
 }
 
 static int halt_and_wait(struct target *target, int count){
 
-    int ret = write_JDCR(target, JDCR_STO_MASK);
+    int ret = ERROR_OK;
+    bool dwe = target_to_ppc476fp(target)->DWE;
+    if(dwe){
+        ret = write_JDCR(target,JDCR_DWS_MASK|JDCR_UDE_MASK);
+    }else{
+        ret = write_JDCR(target, JDCR_STO_MASK|JDCR_UDE_MASK);
+    }
     if (ret != ERROR_OK)
         return ret;
 
@@ -2721,9 +2739,9 @@ static int halt_and_wait(struct target *target, int count){
             return ret;
         }
 
-        if ((JDSR_value & JDSR_PSP_MASK) != 0){
+        if (is_halted(JDSR_value)){
             target->state = TARGET_HALTED;
-        break;
+            break;
         }
     }
     if ( target->state == TARGET_HALTED ){
@@ -2769,7 +2787,7 @@ static int ppc476fp_resume(struct target *target, int current,
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_JDCR(target, 0);
+    ret = write_JDCR(target, JDCR_RSDBSR_MASK | (target_to_ppc476fp(target)->DWE?JDCR_DWS_MASK:0));
     if (ret != ERROR_OK)
         return ret;
 
@@ -2791,7 +2809,7 @@ static int ppc476fp_step(struct target *target, int current,
     if (ret != ERROR_OK)
         return ret;
 
-    ret = write_JDCR(target, JDCR_STO_MASK | JDCR_SS_MASK);
+    ret = write_JDCR(target,  JDCR_SS_MASK | (target_to_ppc476fp(target)->DWE?JDCR_DWS_MASK:JDCR_STO_MASK));
     if (ret != ERROR_OK)
         return ret;
 

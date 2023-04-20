@@ -16,9 +16,19 @@
  */
 
 enum JDSR_bits{
+    JDSR_MCSR1DWE_MASK = BIT(31-5),
+    JDSR_UDE_MASK = BIT(31-6),
+    JDSR_DE_MASK = BIT(31-7),
+    JDSR_CSSR1DWE_MASK = BIT(31-8),
+    JDSR_SSR1DWE_MASK = BIT(31-9),
+    JDSR_MSRDWE_MASK = BIT(31-10),
+    JDSR_ICB_MASK = BIT(31-11),
     JDSR_SFP_MASK = BIT(31-12),
+    JDSR_SPP_MASK = BIT(31-13),
+    JDSR_SUP_MASK = BIT(31-14),
     JDSR_FPU_MASK = BIT(31-15),
     JDSR_APU_MASK = BIT(31-16),
+    JDSR_CCO_MASK = BIT(31-17),
     JDSR_ISE_MASK = BIT(31-18),
     JDSR_DTM_MASK = BIT(31-19),
     JDSR_ITM_MASK = BIT(31-20),
@@ -31,21 +41,29 @@ enum JDSR_bits{
     JDSR_RCFI_MASK = BIT(31-27),
     JDSR_IMC_MASK = BIT(31-28),
     JDSR_ISO_MASK = BIT(31-30),
-    JDSR_PSP_MASK = BIT(31 - 31),
+    JDSR_PSP_MASK = BIT(31-31),
+
     JDSR_SER_MASK = JDSR_FPU_MASK | JDSR_APU_MASK | JDSR_ISE_MASK
 	    | JDSR_DTM_MASK | JDSR_ITM_MASK | JDSR_RMCE_MASK | JDSR_DSE_MASK
 	    | JDSR_AE_MASK | JDSR_PE_MASK | JDSR_SC_MASK | JDSR_RFI_MASK
-	    | JDSR_RCFI_MASK | JDSR_IMC_MASK | JDSR_PSP_MASK
+	    | JDSR_RCFI_MASK | JDSR_IMC_MASK | JDSR_PSP_MASK,
+
+    JDSR_DWE_MASK = JDSR_CSSR1DWE_MASK | JDSR_SSR1DWE_MASK | JDSR_MSRDWE_MASK,
 };
 
 enum JDCR_bits{
     JDCR_STO_MASK = BIT(31 - 0),
+    JDCR_BFL_MASK = BIT(31-1),
     JDCR_SS_MASK = BIT(31 - 2),
     JDCR_RESET_MASK = (3 << (31 - 4)), /* reset bits */
     JDCR_RESET_CORE = (1 << (31 - 4)), /* core reset */
     JDCR_RESET_CHIP = (2 << (31 - 4)), /* chip reset */
     JDCR_RESET_SYS = (3 << (31 - 4)),  /* system reset */
+    JDCR_UDE_MASK = BIT(31-5),
+    JDCR_FT_MASK = BIT(31-6),
+    JDCR_DPO_MASK = BIT(31-7),
     JDCR_RSDBSR_MASK = BIT(31 - 8),
+    JDCR_DWS_MASK = BIT(31-9),
 };
 
 enum SPR_REG_NUM {
@@ -67,6 +85,12 @@ enum SPR_REG_NUM {
     SPR_REG_NUM_MMUBE1 = 821,
     SPR_REG_NUM_DBDR = 1011,
     SPR_REG_NUM_DCRIPR = 891,
+    SPR_REG_NUM_SRR0 = 26,
+    SPR_REG_NUM_SRR1 = 27,
+    SPR_REG_NUM_CSRR0 = 58,
+    SPR_REG_NUM_CSRR1 = 59,
+    SPR_REG_NUM_MCSRR0 = 570,
+    SPR_REG_NUM_MCSRR1 = 571,
 };
 
 enum DCR_bits {
@@ -107,6 +131,7 @@ enum MSR_bits{
     MSR_PR_MASK = BIT(63 - 49),
     MSR_FP_MASK = BIT(63 - 50),
     MSR_DS_MASK = BIT(63 - 59),
+    MSR_DWE_MASK = BIT(63 - 53),
 };
 
 enum DCDBTRH{
@@ -285,6 +310,7 @@ struct ppc476fp_common {
     unsigned long long transactions;
     uint32_t current_gpr_values[GPR_REG_COUNT];
     uint32_t current_gpr_values_valid[GPR_REG_COUNT];
+    bool DWE;
 };
 
 struct ppc476fp_tap_ext {
@@ -343,6 +369,14 @@ target_to_ppc476fp_tap_ext(struct target *target);
  * ошибки и возвращает ошибку при наличии
 */
 static int jdsr_log_ser(uint32_t JDSR);
+
+/**
+ * @brief Анализ JDSR на остановленность таргета
+ * @param[in] jdsr Значение JDSR
+ * @return true - таргет остановлен, false - не остановлен
+*/
+static bool is_halted(uint32_t jdsr);
+
 /**
  * @}
  * \defgroup config Функции конфигурирования обмена
@@ -790,18 +824,6 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value);
  * @warning Обновляет кэш OpenOCD
  */
 static int write_DBCR0(struct target *target, uint32_t data);
-
-/**
- * @brief Очистка DBSR
- *
- * Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual 8.5.4 с. 239
- *
- * Не меняет состояние регистров, очистка происходит через JDCR
- *
- * @param[in] target Указатель на объект target
- * @return ERROR_OK - успешно, иначе - код ошибки
- */
-static int clear_DBSR(struct target *target);
 
 /**
  * @brief Чтение MSR
