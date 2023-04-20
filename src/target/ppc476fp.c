@@ -4533,27 +4533,29 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
                     break;
                 }
                 enum l2_cache_state line_state = info&l2_cache_state_mask;
+                static const char line_state_strings[6][3] = {"S","SL","E","T","M","MU"};
+                const char *line_state_string = NULL;
                 bool valid = true;
                 uint32_t eaddr = (info>>19)&0x3ff;
                 uint32_t addr = (info<<13)|(set<<7);
                 switch (line_state){
                 case l2_cache_state_shared:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x S  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
+                    line_state_string = line_state_strings[0];
                     break;
                 case l2_cache_state_shared_last:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x SL addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
+                    line_state_string = line_state_strings[1];
                     break;
                 case l2_cache_state_exclusive:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x E  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
+                    line_state_string = line_state_strings[2];
                     break;
                 case l2_cache_state_tagged:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x T  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
+                    line_state_string = line_state_strings[3];
                     break;
                 case l2_cache_state_modified:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x M  addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
+                    line_state_string = line_state_strings[4];
                     break;
                 case l2_cache_state_modified_unsolicited:
-                    command_print(CMD,"Set %4i way %i: %08x, %02x MU addr: %03x:%08x:",set,way,info,ecc_data>>1,eaddr,addr);
+                    line_state_string = line_state_strings[5];
                     break;
                 case l2_cache_state_invalid:
                 case l2_cache_state_undefined:
@@ -4561,13 +4563,14 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
                     break;
                 }
                 if (valid){
+                    command_print(CMD,"Set %4i way %i: %08x:%02x %2s addr: %03x:%08x:",set,way,info,ecc_data>>1,line_state_string,eaddr,addr);
                     for(uint32_t i=0;i<16;++i){
                         keep_alive();
                         uint32_t data_h,data_l;
                         if(i%8==0)
-                           command_print_sameline(CMD,"                                                    ");
+                           command_print_sameline(CMD,"      ");
                         l2_read_data(&context,set*16+i,way,&data_h,&data_l,ecc);
-                        command_print_sameline(CMD," %08x:%08x:%x", target_buffer_get_u32(target,(uint8_t*)&data_h), target_buffer_get_u32(target,(uint8_t*)&data_l), ecc_data);
+                        command_print_sameline(CMD," %08x:%08x:%02x", target_buffer_get_u32(target,(uint8_t*)&data_h), target_buffer_get_u32(target,(uint8_t*)&data_l), ecc_data);
                         if(i%8==7)
                             command_print(CMD," ");
                     }
