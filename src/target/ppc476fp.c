@@ -2707,13 +2707,19 @@ static int ppc476fp_poll(struct target *target) {
     return ret;
 }
 
-// call only then the target is halted
-static int ppc476fp_arch_state(struct target *target) {
+static void arch_state(struct target *target, char *st, size_t l) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 
-    LOG_USER("target halted due to %s, coreid=%i, PC: 0x%08X, DW %s",
+    snprintf(st,l,"target halted due to %s, coreid=%i, PC: 0x%08X, DW %s",
              debug_reason_name(target), target->coreid,
              get_reg_value_32(ppc476fp->PC_reg), (ppc476fp->DWE?"enabled":"disabled"));
+}
+
+// call only then the target is halted
+static int ppc476fp_arch_state(struct target *target) {
+    char st[256];
+    arch_state(target,st,sizeof(st));
+    LOG_USER("%s",st);
 
     return ERROR_OK;
 }
@@ -2822,6 +2828,10 @@ static int ppc476fp_step(struct target *target, int current,
             target->state = TARGET_UNKNOWN;
             return ret;
         }
+        
+        char st[256];
+        arch_state(target,st,sizeof(st));
+        LOG_INFO("%s",st);
         return ERROR_OK;
     }
 
@@ -3469,7 +3479,7 @@ static int use_stack_off(struct target *target, enum reg_action action) {
         ppc476fp->use_stack = false;
         return ERROR_OK;
     }
-    LOG_INFO("use_fpu enabled, disabling");
+    LOG_WARNING("use_fpu enabled, disabling");
     ret = use_fpu_off(target, action);
     if (ret != ERROR_OK) {
         return ret;
@@ -3521,7 +3531,7 @@ static int use_static_mem_off(struct target *target, enum reg_action action) {
         ppc476fp->use_static_mem = 0xffffffff;
         return ERROR_OK;
     }
-    LOG_INFO("use_fpu enabled, disabling");
+    LOG_WARNING("use_fpu enabled, disabling");
     ret = use_fpu_off(target, action);
     if (ret != ERROR_OK) {
         return ret;

@@ -378,6 +378,14 @@ static int jdsr_log_ser(uint32_t JDSR);
 static bool is_halted(uint32_t jdsr);
 
 /**
+ * @brief Возвращает строку, в которую записан arch_state
+ * @param[in] target Указатель на объект target
+ * @param[out] st Указатель на буфер
+ * @param[in] l максимальная длина буфера
+*/
+static void arch_state(struct target *target, char *st, size_t l);
+
+/**
  * @}
  * \defgroup config Функции конфигурирования обмена
  * Некоторые из этих Функций имеют только локальное действие,
