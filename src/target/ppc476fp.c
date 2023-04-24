@@ -1698,6 +1698,9 @@ static int reset_and_halt(struct target *target) {
         ret = write_JDCR(target, JDCR_RESET_SYS | JDCR_STO_MASK);
         if (ret != ERROR_OK)
             return ret;
+        ret = write_JDCR(target, JDCR_RESET_CHIP | JDCR_STO_MASK);
+        if (ret != ERROR_OK)
+            return ret;
         target->state = TARGET_HALTED;
     }
     ret = write_spr_reg(target, SPR_REG_NUM_SRR1, 0);
