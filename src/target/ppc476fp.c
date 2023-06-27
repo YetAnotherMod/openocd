@@ -2861,6 +2861,9 @@ static int ppc476fp_deassert_reset(struct target *target) {
         invalidate_regs_status(target);
         invalidate_tlb_cache(target);
     }
+    else{
+        ppc476fp_arch_state(target);
+    }
 
     return ERROR_OK;
 }
@@ -3698,6 +3701,11 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_read_command) {
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
         return ret;
@@ -3721,6 +3729,11 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_get_command) {
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
         return ret;
@@ -3743,6 +3756,11 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_write_command) {
     uint32_t addr;
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
 
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
@@ -3770,6 +3788,11 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_or_command) {
     uint32_t data;
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
 
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
@@ -3803,6 +3826,11 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_xor_command) {
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
@@ -3835,6 +3863,11 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_and_command) {
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
@@ -3866,6 +3899,11 @@ COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
         return ret;
@@ -3889,6 +3927,11 @@ COMMAND_HANDLER(ppc476fp_handle_spr_get_command) {
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
         return ret;
@@ -3911,6 +3954,11 @@ COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
     uint32_t addr;
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
 
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
@@ -3938,6 +3986,11 @@ COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
     uint32_t data;
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
 
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
@@ -3971,6 +4024,11 @@ COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
 
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
     if (ret != ERROR_OK) {
@@ -4002,6 +4060,11 @@ COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
     uint32_t data;
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
 
     int ret;
     ret = parse_u32(CMD_ARGV[0], &addr);
@@ -4599,6 +4662,52 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
     return ret | flush_registers(target);
 }
 
+COMMAND_HANDLER(ppc476fp_tb_command) {
+    if (CMD_ARGC > 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint64_t tb;
+    uint32_t tbl;
+    uint32_t tbu;
+    struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    int ret = ERROR_OK;
+
+    if ( CMD_ARGC == 1 ){
+        ret = parse_u64(CMD_ARGV[0], &tb);
+        if (ret != ERROR_OK) {
+            return ret;
+        }
+        tbu = tb>>32;
+        tbl = tb &0xffffffff;
+        ret = write_spr_reg(target,SPR_REG_NUM_TBL_W,tbl);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = write_spr_reg(target,SPR_REG_NUM_TBU_W,tbu);
+        if (ret != ERROR_OK)
+            return ret;
+    }else{
+        ret = read_spr_reg(target, SPR_REG_NUM_TBU_R, (uint8_t *)&tbu);
+        if (ret != ERROR_OK)
+            return ret;
+        ret = read_spr_reg(target, SPR_REG_NUM_TBL_R, (uint8_t *)&tbl);
+        if (ret != ERROR_OK)
+            return ret;
+        tb = tbu;
+        tb <<= 32;
+        tb |= tbl;
+        command_print(CMD, "%" PRIu64 , tb);
+    }
+
+
+    return flush_registers(target);
+}
+
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
     {{.name = "all",
       .handler = ppc476fp_handle_tlb_drop_all_command,
@@ -4890,6 +4999,10 @@ static const struct command_registration ppc476fp_exec_command_handlers[] = {
      .mode = COMMAND_EXEC,
      .usage = "",
      .help = "dump valid cache"},
+    {.name= "tb",
+     .handler = ppc476fp_tb_command,
+     .usage = "[new_value]",
+     .help = "read or write TBU/TBL register pare"},
     COMMAND_REGISTRATION_DONE};
 
 const struct command_registration ppc476fp_command_handlers[] = {
