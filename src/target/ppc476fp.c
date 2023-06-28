@@ -2334,6 +2334,7 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd,
     uint32_t saved_MMUCR;
     uint32_t value_SSPCR;
     uint32_t value_USPCR;
+    uint32_t value_PID;
     int i;
     int record_count;
     int ret;
@@ -2355,6 +2356,9 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd,
     if (ret != ERROR_OK)
         return ret;
     ret = read_spr_reg(target, SPR_REG_NUM_USPCR, (uint8_t *)&value_USPCR);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = read_spr_reg(target, SPR_REG_NUM_PID, (uint8_t *)&value_PID);
     if (ret != ERROR_OK)
         return ret;
 
@@ -2379,8 +2383,8 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd,
     for (i = 0; i < record_count; ++i) {
         print_tlb_table_record(CMD, records[i].index_way, &records[i].hw);
     }
-    command_print(CMD, "SSPCR = 0x%08X, USPCR = 0x%08X", value_SSPCR,
-                  value_USPCR);
+    command_print(CMD, "SSPCR = 0x%08X, USPCR = 0x%08X, PID = 0x%04X", value_SSPCR,
+                  value_USPCR, value_PID);
 
     return ERROR_OK;
 }
