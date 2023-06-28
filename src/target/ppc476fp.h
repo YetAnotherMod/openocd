@@ -132,10 +132,19 @@ enum DBSR_bits{
 };
 
 enum MSR_bits{
+    MSR_WE_MASK = BIT(63 - 45),
+    MSR_CE_MASK = BIT(63 - 46),
+    MSR_EE_MASK = BIT(63 - 48),
     MSR_PR_MASK = BIT(63 - 49),
     MSR_FP_MASK = BIT(63 - 50),
-    MSR_DS_MASK = BIT(63 - 59),
+    MSR_ME_MASK = BIT(63 - 51),
+    MSR_FE0_MASK = BIT(63 - 52),
     MSR_DWE_MASK = BIT(63 - 53),
+    MSR_DE_MASK = BIT(63 - 54),
+    MSR_FE1_MASK = BIT(63 - 55),
+    MSR_IS_MASK = BIT(63 - 58),
+    MSR_DS_MASK = BIT(63 - 59),
+    MSR_PMM_MASK = BIT(63 - 61),
 };
 
 enum DCDBTRH{
