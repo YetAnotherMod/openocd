@@ -320,7 +320,6 @@ struct ppc476fp_common {
     uint32_t use_static_mem;
     enum target_endianness use_static_mem_endianness;
     bool memory_checked;
-    unsigned long long transactions;
     uint32_t current_gpr_values[GPR_REG_COUNT];
     uint32_t current_gpr_values_valid[GPR_REG_COUNT];
     bool DWE;

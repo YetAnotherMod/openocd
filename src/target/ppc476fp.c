@@ -9,6 +9,11 @@
 
 #include <helper/log.h>
 
+static unsigned long long transactions = 0;
+static unsigned long long detected_errors = 0;
+static unsigned long long poll_transactions = 0;
+static unsigned long long poll_detected_errors = 0;
+
 static bool is_halted(uint32_t jdsr){
     if ((jdsr&JDSR_DWE_MASK)!=0){
         if ((jdsr & (JDSR_UDE_MASK | JDSR_DE_MASK)))
@@ -170,7 +175,7 @@ static int jtag_read_write_register(struct target *target,
     data_fields.out_value = data_out_buffer;
     data_fields.in_value = data_in_buffer;
     jtag_add_dr_scan(target->tap, 1, &data_fields, TAP_IDLE);
-    target_to_ppc476fp(target)->transactions++;
+    transactions++;
 
     // !!! IMPORTANT
     // make additional request with valid bit == 0
@@ -180,27 +185,21 @@ static int jtag_read_write_register(struct target *target,
         jtag_add_ir_scan(target->tap, &instr_field, TAP_IDLE);
         data_fields.out_value = (uint8_t *)zeros;
         jtag_add_dr_scan(target->tap, 1, &data_fields, TAP_IDLE);
-        target_to_ppc476fp(target)->transactions++;
+        transactions++;
     }
 
     ret = jtag_execute_queue();
-    if (ret != ERROR_OK)
-        return ret;
-
-    if (read_data != NULL) {
-        buf_cpy(data_in_buffer, read_data, 32);
-    }
-
-    uint32_t tap_alive1 = 0, tap_alive2 = 0;
-    buf_cpy(tap_alive[0], &tap_alive1, target->tap->ir_length);
-    buf_cpy(tap_alive[1], &tap_alive2, target->tap->ir_length);
-    
-    if ( (tap_alive1 == 1) && (!valid_bit || (tap_alive2 == 1)) ){
-        return ERROR_OK;
-    }else{
+    if (ret != ERROR_OK){
+        detected_errors++;
+        tap_ext->last_coreid = -1;
         target->state = TARGET_UNKNOWN;
-        return ERROR_JTAG_DEVICE_ERROR;
+    }else{
+        if (read_data != NULL) {
+            buf_cpy(data_in_buffer, read_data, 32);
+        }
+
     }
+    return ret;
 }
 
 // чтение JTAG-регистра DBDR. Это единственный способ получить ответные данные
@@ -1225,7 +1224,6 @@ static void build_reg_caches(struct target *target) {
     ppc476fp->use_stack = TARGET_ENDIAN_UNKNOWN;
     ppc476fp->use_static_mem = 0xffffffff;
     ppc476fp->use_static_mem_endianness = TARGET_ENDIAN_UNKNOWN;
-    ppc476fp->transactions = 0;
 }
 
 // установка аппаратной точки останова (предполагается, что она создана ранее)
@@ -1743,6 +1741,7 @@ static int examine_internal(struct target *target) {
     uint32_t DBDR_value;
     int ret;
 
+    jtag_add_tlr();
     tap_ext->last_coreid = -1;
     ret = read_DBDR(target, (uint8_t *)&DBDR_value);
     if (ret != ERROR_OK) {
@@ -2707,10 +2706,13 @@ static int poll_internal(struct target *target) {
 }
 
 static int ppc476fp_poll(struct target *target) {
-    unsigned long long transactions_begin = target_to_ppc476fp(target)->transactions;
+    unsigned long long transactions_begin = transactions;
+    unsigned long long detected_errors_begin = detected_errors;
     int ret = poll_internal(target);
-    LOG_DEBUG_IO("poll_transactions: %llu",target_to_ppc476fp(target)->transactions-transactions_begin);
-    target_to_ppc476fp(target)->transactions = transactions_begin;
+    poll_transactions += transactions-transactions_begin;
+    poll_detected_errors += detected_errors-detected_errors_begin;
+    transactions = transactions_begin;
+    detected_errors = detected_errors_begin;
     return ret;
 }
 
@@ -3719,20 +3721,33 @@ COMMAND_HANDLER(ppc476fp_handle_status_command) {
     uint32_t JDSR_value;
     int ret;
 
+    unsigned long long transactions_begin = transactions;
+    unsigned long long detected_errors_begin = detected_errors;
+
     if (CMD_ARGC != 0)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
+    command_print(CMD, "PowerPC JTAG status:");
     ret = read_JDSR(target, (uint8_t *)&JDSR_value);
     if (ret != ERROR_OK) {
         command_print(CMD, "cannot read JDSR register");
-        return ret;
+    }else{
+        command_print(CMD, "  JDSR = 0x%08X", JDSR_value);
     }
 
-    command_print(CMD, "PowerPC JTAG status:");
-    command_print(CMD, "  JDSR = 0x%08X", JDSR_value);
-    command_print(CMD, "  transaction_counter: %llu",--(target_to_ppc476fp(target)->transactions));
+    poll_transactions += transactions - transactions_begin;
+    poll_detected_errors += detected_errors - detected_errors_begin;
 
-    return ERROR_OK;
+    transactions = transactions_begin;
+    detected_errors = detected_errors_begin;
+
+    LOG_DEBUG("  transaction_counter: %llu",transactions);
+    LOG_DEBUG("  detected_error_counter: %llu (%f%%)",detected_errors,100.0*detected_errors/transactions);
+    LOG_DEBUG("  poll_transaction_counter: %llu",poll_transactions);
+    LOG_DEBUG("  poll_detected_error_counter: %llu (%f%%)",poll_detected_errors,100.0*poll_detected_errors/poll_transactions);
+    LOG_DEBUG("  detected_error_summary: %llu (%f%%)",detected_errors+poll_detected_errors,100.0*(detected_errors+poll_detected_errors)/(transactions+poll_transactions));
+
+    return ret;
 }
 
 COMMAND_HANDLER(ppc476fp_handle_jtag_speed_command) {
@@ -3740,20 +3755,31 @@ COMMAND_HANDLER(ppc476fp_handle_jtag_speed_command) {
     int64_t start_time = timeval_ms();
     uint32_t count = 0;
     uint32_t dummy_data;
-    int ret;
+    int ret = ERROR_OK;
+
+    unsigned long long transactions_begin = transactions;
+    unsigned long long detected_errors_begin = detected_errors;
 
     while (timeval_ms() - start_time < 1000) {
         ret = read_DBDR(target, (uint8_t *)&dummy_data);
         if (ret != ERROR_OK) {
             command_print(CMD, "JTAG communication error");
-            return ret;
+            break;
         }
         ++count;
     }
 
-    command_print(CMD, "JTAG speed = %u (transaction per second)", count);
+    poll_transactions += transactions - transactions_begin;
+    poll_detected_errors += detected_errors - detected_errors_begin;
 
-    return ERROR_OK;
+    transactions = transactions_begin;
+    detected_errors = detected_errors_begin;
+
+    if ( ret == ERROR_OK ){
+        command_print(CMD, "JTAG speed = %u (transaction per second)", count);
+    }
+
+    return ret;
 }
 
 COMMAND_HANDLER(ppc476fp_handle_dcr_read_command) {
