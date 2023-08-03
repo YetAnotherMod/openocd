@@ -119,15 +119,16 @@ enum l2_size{
 };
 
 enum l2_cache_state{
-    l2_cache_state_invalid = 0<<29,
-    l2_cache_state_undefined = 1<<29,
-    l2_cache_state_shared = 2<<29,
-    l2_cache_state_shared_last = 3<<29,
-    l2_cache_state_exclusive = 4<<29,
-    l2_cache_state_tagged = 5<<29,
-    l2_cache_state_modified = 6<<29,
-    l2_cache_state_modified_unsolicited = 7<<29,
-    l2_cache_state_mask = 7<<29,
+    l2_cache_state_shift = 29,
+    l2_cache_state_invalid = 0<<l2_cache_state_shift,
+    l2_cache_state_undefined = 1<<l2_cache_state_shift,
+    l2_cache_state_shared = 2<<l2_cache_state_shift,
+    l2_cache_state_shared_last = 3<<l2_cache_state_shift,
+    l2_cache_state_exclusive = 4<<l2_cache_state_shift,
+    l2_cache_state_tagged = 5<<l2_cache_state_shift,
+    l2_cache_state_modified = 6<<l2_cache_state_shift,
+    l2_cache_state_modified_unsolicited = 7<<l2_cache_state_shift,
+    l2_cache_state_mask = 7<<l2_cache_state_shift,
 };
 
 enum l2_arracc{
@@ -159,6 +160,15 @@ struct l2_context{
     uint32_t tag_n;
     uint32_t lru_n;
     uint32_t data_n;
+};
+
+struct l2_line{
+    uint64_t base_addr;
+    uint32_t data[16][2];
+    uint32_t tag_info;
+    enum l2_cache_state line_state;
+    uint8_t ecc_data[16];
+    uint8_t ecc_tag;
 };
 
 static inline int l2_write(struct l2_context *context, enum L2C_L2REG reg, uint32_t data){
@@ -331,6 +341,40 @@ static inline int l2_read_data(struct l2_context *context, uint32_t data_addr, u
         ret = l2_read(context,L2C_L2ARRACCDO2, data_ecc);
         if(ret!=ERROR_OK)
             return ret;
+    }
+    return ret;
+}
+
+static inline int l2_read_line(struct l2_context *context, uint32_t set, uint32_t way, int ecc, int read_invalid, int filtred, uint64_t filtring_addr, struct l2_line *line){
+    uint32_t info;
+
+    int ret = ERROR_OK;
+    uint32_t ecc_value = 0;
+    uint32_t *pecc = ecc?&ecc_value:NULL;
+    l2_read_tag(context,set,way,&info,pecc);
+    if (ret != ERROR_OK){
+        LOG_ERROR("Can't read tag %i",set);
+        return ret;
+    }
+    line->tag_info = info;
+    line->ecc_tag = ecc_value>>1;
+    line->line_state = info&l2_cache_state_mask;
+    bool valid = true;
+    uint32_t eaddr = (info>>19)&0x3ff;
+    uint32_t addr = (info<<13)|(set<<7);
+    line->base_addr = eaddr;
+    line->base_addr <<=32;
+    line->base_addr |= addr;
+    if ((line->line_state == l2_cache_state_invalid)||(line->line_state == l2_cache_state_undefined))
+        valid = false;
+    if (
+            ( !filtred || ( (filtring_addr & 0xffffffffffffff80ull) == line->base_addr ) )
+            && (valid||read_invalid)
+        ){
+        for(uint32_t i=0;i<16;++i){
+            l2_read_data(context,set*16+i,way,&line->data[i][0],&line->data[i][1],pecc);
+            line->ecc_data[i]=ecc_value;
+        }
     }
     return ret;
 }
