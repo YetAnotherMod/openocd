@@ -289,7 +289,7 @@ struct tlb_command_params {
     uint32_t tid;
     uint32_t ts;
     uint32_t dsiz; // DSIZ*
-    int way;       // -1 for 'auto'
+    uint32_t way;       // -1 for 'auto'
     uint32_t il1i;
     uint32_t il1d;
     uint32_t u;
@@ -698,8 +698,22 @@ static int stuff_code(struct target *target, uint32_t code);
  *
  * @warning значение в кэше OpenOCD остаётся неизменным, и регистр не помечается
  * грязным. Использует DBDR
+ * В data записывается буфер, который может быть напрямую помещён в структуру
+ * reg
  */
-static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data);
+static int read_gpr_buf(struct target *target, int reg_num, uint8_t *data);
+
+/**
+ * @brief Прочитать значение РОН из таргета
+ * @param[in] target Указатель на объект target
+ * @param[out] data Указатель на буфер, куда записать результат
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ *
+ * @warning значение в кэше OpenOCD остаётся неизменным, и регистр не помечается
+ * грязным. Использует DBDR
+ * В data записывается число в порядке байт хоста
+ */
+static int read_gpr_u32(struct target *target, int reg_num, uint32_t *data);
 
 /**
  * @brief Записать значение в РОН таргета
@@ -711,8 +725,23 @@ static int read_gpr_reg(struct target *target, int reg_num, uint8_t *data);
  * грязным
  *
  * Не использует DBDR, записывает значение через инструкции lis, li и ori
+ * Принимает на вход массив, прочитанный с помощью read_gpr_buf
  */
-static int write_gpr_reg(struct target *target, int reg_num, uint32_t data);
+static int write_gpr_buf(struct target *target, int reg_num, const uint8_t *data);
+
+/**
+ * @brief Записать значение в РОН таргета
+ * @param[in] target Указатель на объект target
+ * @param[in] data Значение для записи
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ *
+ * @warning значение в кэше OpenOCD остаётся неизменным и регистр помечается
+ * грязным
+ *
+ * Не использует DBDR, записывает значение через инструкции lis, li и ori
+ * Принимает на вход число
+ */
+static int write_gpr_u32(struct target *target, int reg_num, uint32_t data);
 
 /**
  * @brief Обёртка над инструкциями lbz, lhz, lwz
@@ -794,7 +823,17 @@ static int test_memory_at_addr(struct target *target, uint32_t ra, int16_t shift
  * @param[out] data Буфер для результата
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
-static int read_spr_reg(struct target *target, int spr_num, uint8_t *data);
+static int read_spr_buf(struct target *target, int spr_num, uint8_t *data);
+
+/**
+ * @brief Чтение  регистра SPR
+ *
+ * @param[in] target Указатель на объект target
+ * @param[in] spr_num Номер регистра
+ * @param[out] data Буфер для результата
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ */
+static int read_spr_u32(struct target *target, int spr_num, uint32_t *data);
 
 /**
  * @brief Запись  регистра SPR
@@ -804,7 +843,17 @@ static int read_spr_reg(struct target *target, int spr_num, uint8_t *data);
  * @param[in] data Данные для записи
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
-static int write_spr_reg(struct target *target, int spr_num, uint32_t data);
+static int write_spr_buf(struct target *target, int spr_num, const uint8_t* data);
+
+/**
+ * @brief Запись  регистра SPR
+ *
+ * @param[in] target Указатель на объект target
+ * @param[in] spr_num Номер регистра
+ * @param[in] data Данные для записи
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ */
+static int write_spr_u32(struct target *target, int spr_num, uint32_t data);
 
 /**
  * @brief Прочитать значение регистра fpu из таргета
@@ -851,10 +900,21 @@ static int write_DBCR0(struct target *target, uint32_t data);
  * Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual 7.4.1 с. 173
  *
  * @param[in] target Указатель на объект target
- * @param[out] value Буфер для результата
+ * @param[out] data Буфер для результата
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
-static int read_MSR(struct target *target, uint8_t *value);
+static int read_MSR_u32(struct target *target, uint32_t *data);
+
+/**
+ * @brief Чтение MSR
+ *
+ * Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual 7.4.1 с. 173
+ *
+ * @param[in] target Указатель на объект target
+ * @param[out] data Буфер для результата
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ */
+static int read_MSR_buf(struct target *target, uint8_t *data);
 
 /**
  * @brief Запись MSR
@@ -862,10 +922,21 @@ static int read_MSR(struct target *target, uint8_t *value);
  * Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual 7.4.1 с. 173
  *
  * @param[in] target Указатель на объект target
- * @param[in] value Значение для записи
+ * @param[in] data Значение для записи
  * @return ERROR_OK - успешно, иначе - код ошибки
  */
-static int write_MSR(struct target *target, uint32_t value);
+static int write_MSR_buf(struct target *target, const uint8_t *data);
+
+/**
+ * @brief Запись MSR
+ *
+ * Подробнее: PowerPC 476FP Embedded Processor Core User’s Manual 7.4.1 с. 173
+ *
+ * @param[in] target Указатель на объект target
+ * @param[in] data Значение для записи
+ * @return ERROR_OK - успешно, иначе - код ошибки
+ */
+static int write_MSR_u32(struct target *target, uint32_t data);
 
 /**
  * @brief Чтение DCR
