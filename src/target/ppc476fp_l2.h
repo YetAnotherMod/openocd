@@ -331,6 +331,19 @@ static inline int l2_arracc_read(struct l2_context *context, uint32_t array_addr
     return ret;
 }
 
+static inline int l2_read_lru(struct l2_context *context, uint32_t lru_addr, uint32_t *lru_info){
+    int ret = ERROR_OK;
+    ret = l2_arracc_read(context,lru_addr<<1,l2_arraccctl_bid_lru);
+    if(ret!=ERROR_OK)
+        return ret;
+    if (lru_info){
+        ret = l2_read_u32(context,L2C_L2ARRACCDO0, lru_info);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
+    return ret;
+}
+
 static inline int l2_read_tag(struct l2_context *context, uint32_t tag_addr, uint32_t cache_way, uint32_t *tag_info, uint32_t *tag_ecc){
     int ret = ERROR_OK;
     ret = l2_arracc_read(context,tag_addr<<1,l2_arraccctl_bid_tag|(cache_way<<l2_arraccctl_way_ind));

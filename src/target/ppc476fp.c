@@ -4723,6 +4723,7 @@ static unsigned int addr_to_tag(struct l2_context *context, uint64_t addr){
 static int cache_l2_command_internal(struct l2_context *context, const uint64_t* addrs, int addr_count, int read_invalid, int ecc, struct command_invocation *cmd){
     int ret = ERROR_OK;
     for (uint32_t set=0;set<(1u<<context->tag_n);++set){
+        uint32_t lru_info = 0;
         if ( addr_count > 0 ){
             int i;
             for ( i=0; i < addr_count ; i++ ){
@@ -4759,6 +4760,19 @@ static int cache_l2_command_internal(struct l2_context *context, const uint64_t*
                 need_print = false;
             }
             if (need_print){
+                // из-за битов чётности, LRU не может быть нулём
+                if ( lru_info == 0 ){
+                    ret = l2_read_lru(context, set, &lru_info);
+                    if ( ret != ERROR_OK ){
+                        LOG_ERROR("Can't read LRU from set %i", set);
+                        return ret;
+                }
+                command_print(cmd, "set % 4i LRU: %02x LP: %x LB: %x IP: %x IB: %x"
+                ,set
+                ,(lru_info>>26)&0x3f
+                ,(lru_info>>22)&0xf, (lru_info>>18)&0xf
+                ,(lru_info>>10)&0xff, (lru_info>>2)&0xff);
+                }
                 command_print(cmd,"Set %4i way %i: %08x:%02x %s addr: %03x:%08x:"
                         ,set,way,line.tag_info,line.ecc_tag
                         ,line_state_strings[((uint32_t)line.line_state)>>l2_cache_state_shift]
