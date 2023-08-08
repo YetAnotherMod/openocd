@@ -4712,33 +4712,58 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
     return flush_registers(target);
 }
 
+static unsigned int addr_to_set(struct l2_context *context, uint64_t addr){
+    return (addr/128)%(1u<<context->tag_n);
+}
+
+static unsigned int addr_to_tag(struct l2_context *context, uint64_t addr){
+    return (addr/128)>>context->tag_n;
+}
+
 static int cache_l2_command_internal(struct l2_context *context, const uint64_t* addrs, int addr_count, int read_invalid, int ecc, struct command_invocation *cmd){
     int ret = ERROR_OK;
     for (uint32_t set=0;set<(1u<<context->tag_n);++set){
-        int wanted_tag = -1;
         if ( addr_count > 0 ){
             int i;
             for ( i=0; i < addr_count ; i++ ){
-                uint64_t wanted_set = (addrs[i]/128)%(1u<<context->tag_n);
-                if (set == wanted_set){
-                    wanted_tag = (addrs[i]/128)>>context->tag_n;
+                uint64_t wanted_set = addr_to_set(context,addrs[i]);
+                if (set == wanted_set)
                     break;
-                }
             }
             if ( i == addr_count )
                 continue;
         }
         for (uint32_t way = 0 ; way<4 ; ++way){
-            static const char line_state_strings[8][3] = {"IV","UD","S","SL","E","T","M","MU"};
+            static const char line_state_strings[8][3] = {"IV","UD","S ","SL","E ","T ","M ","MU"};
             struct l2_line line;
             ret = l2_read_line(context,set,way,ecc,read_invalid,0,0,&line);
             if (ret != ERROR_OK){
                 LOG_ERROR("Can't read tag from set %i way %i", set, way);
                 return ret;
             }
-            if (((wanted_tag == -1) || (((line.base_addr/128)>>context->tag_n) == (uint64_t)wanted_tag))&&(((line.line_state != l2_cache_state_invalid)&&(line.line_state != l2_cache_state_undefined))||read_invalid)){
-                command_print(cmd,"Set %4i way %i: %08x:%02x %2s addr: %03x:%08x:",set,way,line.tag_info,line.ecc_tag,line_state_strings[line.line_state>>l2_cache_state_shift],(uint32_t)(line.base_addr>>32),(uint32_t)(line.base_addr));
-                uint32_t subline=0;
+            bool need_print = addr_count>0;
+            if (!need_print){
+                unsigned int tag = addr_to_tag ( context, line.base_addr);
+                for ( int i=0; i < addr_count ; i++ ){
+                    if ( addr_to_tag ( context, addrs[i] ) == tag ){
+                        need_print = true;
+                        break;
+                    }
+                }
+            }
+            if ( 
+                    (!read_invalid) &&
+                    ((line.line_state==l2_cache_state_invalid)||
+                    (line.line_state==l2_cache_state_undefined))
+                ){
+                need_print = false;
+            }
+            if (need_print){
+                command_print(cmd,"Set %4i way %i: %08x:%02x %s addr: %03x:%08x:"
+                        ,set,way,line.tag_info,line.ecc_tag
+                        ,line_state_strings[((uint32_t)line.line_state)>>l2_cache_state_shift]
+                        ,(uint32_t)(line.base_addr>>32),(uint32_t)(line.base_addr));
+                int subline = 0;
                 command_print(cmd," [+00] %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x",
                         line.data[subline+0][0],line.data[subline+0][1],line.ecc_data[subline+0],
                         line.data[subline+1][0],line.data[subline+1][1],line.ecc_data[subline+1],
