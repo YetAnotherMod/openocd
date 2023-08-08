@@ -4741,7 +4741,7 @@ static int cache_l2_command_internal(struct l2_context *context, const uint64_t*
                 LOG_ERROR("Can't read tag from set %i way %i", set, way);
                 return ret;
             }
-            bool need_print = addr_count>0;
+            bool need_print = (addr_count==0);
             if (!need_print){
                 unsigned int tag = addr_to_tag ( context, line.base_addr);
                 for ( int i=0; i < addr_count ; i++ ){
