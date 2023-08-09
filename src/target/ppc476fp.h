@@ -260,8 +260,8 @@ enum bltd{
     bltd3 = 3,
     bltd4 = 4,
     bltd5 = 5,
-    bltd_no = 6,
-    bltd_auto = 7
+    bltd_auto = 6,
+    bltd_no = 7
 };
 
 struct tlb_hw_record {

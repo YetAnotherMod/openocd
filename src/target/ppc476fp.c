@@ -2219,7 +2219,7 @@ static inline int parse_uint32_params(unsigned param_mask, uint32_t max_value,
     int ret;
 
     if ((*current_mask & param_mask) != 0)
-        return ERROR_COMMAND_ARGUMENT_INVALID;
+        return ERROR_COMMAND_ARGUMENT_UNDERFLOW;
     *current_mask |= param_mask;
 
     ret = parse_ulong(param, &value);
@@ -2227,7 +2227,7 @@ static inline int parse_uint32_params(unsigned param_mask, uint32_t max_value,
         return ERROR_COMMAND_ARGUMENT_INVALID; // not ret
 
     if (value > max_value)
-        return ERROR_COMMAND_ARGUMENT_INVALID;
+        return ERROR_COMMAND_ARGUMENT_OVERFLOW;
 
     *dest = (uint32_t)value;
 
@@ -2271,7 +2271,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
     params->tid=0;
     params->ts=0;
     params->dsiz = DSIZ_4K;
-    params->way = -1;
+    params->way = 4;
     params->il1i=0;
     params->il1d=0;
     params->u=0;
@@ -2285,8 +2285,10 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
         arg = argv[arg_index];
 
         p = strchr(arg, '=');
-        if (p == NULL)
+        if (p == NULL){
+            LOG_ERROR("argument without value: %s",arg);
             return ERROR_COMMAND_ARGUMENT_INVALID;
+        }
 
         ++p;
 
@@ -2328,7 +2330,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
                                     &params->dsiz);
         else if (strncmp(arg, "en=",p-arg) == 0) {
             if ((params->mask & TLB_PARAMS_MASK_EN) != 0)
-                ret = ERROR_COMMAND_ARGUMENT_INVALID;
+                ret = ERROR_COMMAND_ARGUMENT_UNDERFLOW;
             else {
                 params->mask |= TLB_PARAMS_MASK_EN;
                 if (strcmp(p, "LE") == 0) {
@@ -2340,11 +2342,11 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
             }
         } else if (strncmp(arg, "way=",p-arg) == 0) {
             if ((params->mask & TLB_PARAMS_MASK_WAY) != 0)
-                ret = ERROR_COMMAND_ARGUMENT_INVALID;
+                ret = ERROR_COMMAND_ARGUMENT_UNDERFLOW;
             else {
                 if (strcmp(p, "auto") == 0) {
                     params->mask |= TLB_PARAMS_MASK_WAY;
-                    params->way = -1;
+                    params->way = 4;
                     ret = ERROR_OK;
                 } else
                     ret = parse_uint32_params(TLB_PARAMS_MASK_WAY, 0x3, p,
@@ -2353,7 +2355,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
             }
         } else if (strncmp(arg, "bltd=",p-arg) == 0) {
             if ((params->mask & TLB_PARAMS_MASK_BLTD) != 0)
-                ret = ERROR_COMMAND_ARGUMENT_INVALID;
+                ret = ERROR_COMMAND_ARGUMENT_UNDERFLOW;
             else {
                 if (strcmp(p, "no") == 0) {
                     params->mask |= TLB_PARAMS_MASK_BLTD;
@@ -2367,11 +2369,25 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
                                               &params->mask, &params->bltd);
             }
 
-        } else
-            ret = ERROR_COMMAND_ARGUMENT_INVALID;
+        } else{
+            LOG_ERROR("unknown argumnet: %s", arg);
+            return ERROR_COMMAND_ARGUMENT_INVALID;
+        }
 
-        if (ret != ERROR_OK)
-            return ret;
+        if (ret != ERROR_OK){
+            switch ( ret ){
+                case ERROR_COMMAND_ARGUMENT_UNDERFLOW:
+                    LOG_ERROR("duplicate param: %s", arg);
+                    break;
+                case ERROR_COMMAND_ARGUMENT_OVERFLOW:
+                    LOG_ERROR("too big value in: %s", arg);
+                    break;
+                case ERROR_COMMAND_ARGUMENT_INVALID:
+                    LOG_ERROR("incorrect value in: %s", arg);
+                    break;
+            }
+            return ERROR_COMMAND_ARGUMENT_INVALID;
+        }
     }
 
     return ERROR_OK;
@@ -2446,7 +2462,7 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t saved_MMUCR;
     int index;
-    int way;
+    uint32_t way;
     int index_way;
     int ret;
     uint32_t bltd;
@@ -2524,7 +2540,7 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
         }
     } else {
         way = params->way;
-        if (way == -1) {
+        if (way == 4) {
             for (way = 1; way <= 4; ++way) {
                 index_way = (index << 2) | (way % 4);
                 ret = load_uncached_tlb(target, index_way);
@@ -3708,7 +3724,7 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_create_command) {
         return ERROR_COMMAND_ARGUMENT_INVALID;
     }
 
-    if ((params.mask & TLB_PARAMS_MASK_BLTD) && (params.way > 0)) {
+    if ((params.bltd < bltd_no) && (params.way > 0) && (params.way < 4)) {
         LOG_ERROR("parameter 'way' is incompatible with 'bltd'");
         return ERROR_COMMAND_ARGUMENT_INVALID;
     }
