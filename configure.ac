@@ -381,6 +381,10 @@ AC_ARG_ENABLE([remote-bitbang],
   AS_HELP_STRING([--enable-remote-bitbang], [Enable building support for the Remote Bitbang jtag driver]),
   [build_remote_bitbang=$enableval], [build_remote_bitbang=no])
 
+AC_ARG_ENABLE([djm],
+  AS_HELP_STRING([--enable-djm], [Enable building support for the Debug Jtag Module driver]),
+  [build_djm=$enableval], [build_djm=no])
+
 AS_CASE(["${host_cpu}"],
   [i?86|x86*], [],
   [
@@ -593,6 +597,13 @@ AS_IF([test "x$build_remote_bitbang" = "xyes"], [
   AC_DEFINE([BUILD_REMOTE_BITBANG], [0], [0 if you don't want the Remote Bitbang JTAG driver.])
 ])
 
+AS_IF([test "x$build_djm" = "xyes"], [
+  build_bitbang=yes
+  AC_DEFINE([BUILD_DJM], [1], [1 if you want the DJM driver.])
+], [
+  AC_DEFINE([BUILD_DJM], [0], [0 if you don't want the DJM driver.])
+])
+
 AS_IF([test "x$build_sysfsgpio" = "xyes"], [
   build_bitbang=yes
   AC_DEFINE([BUILD_SYSFSGPIO], [1], [1 if you want the SysfsGPIO driver.])
@@ -745,6 +756,7 @@ AM_CONDITIONAL([USB_BLASTER_DRIVER], [test "x$enable_usb_blaster" != "xno" -o "x
 AM_CONDITIONAL([AMTJTAGACCEL], [test "x$build_amtjtagaccel" = "xyes"])
 AM_CONDITIONAL([GW16012], [test "x$build_gw16012" = "xyes"])
 AM_CONDITIONAL([REMOTE_BITBANG], [test "x$build_remote_bitbang" = "xyes"])
+AM_CONDITIONAL([DJM], [test "x$build_djm" = "xyes"])
 AM_CONDITIONAL([BUSPIRATE], [test "x$enable_buspirate" != "xno"])
 AM_CONDITIONAL([SYSFSGPIO], [test "x$build_sysfsgpio" = "xyes"])
 AM_CONDITIONAL([XLNX_PCIE_XVC], [test "x$build_xlnx_pcie_xvc" = "xyes"])
