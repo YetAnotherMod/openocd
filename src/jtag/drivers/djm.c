@@ -306,6 +306,12 @@ static int djm_quit(void){
 }
 
 static int djm_reset(int trst, int srst){
+	char c = 'r' + ((trst ? 0x2 : 0x0) | (srst ? 0x1 : 0x0));
+    ssize_t bw = write(djm_fd,&c,1);
+    if ( bw != 1 ){
+        LOG_ERROR("Can't send reset");
+        return ERROR_FAIL;
+    }
     return ERROR_OK;
 }
 
