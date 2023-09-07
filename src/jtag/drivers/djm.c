@@ -274,7 +274,7 @@ static int djm_init(void){
         return ERROR_FAIL;
     }
     usleep(1000);
-    ssize_t rc = read ( djm_fd, ident, sizeof(ident-1));
+    ssize_t rc = read ( djm_fd, ident, sizeof(ident)-1);
     while ( (rc > 0) && (ind < (sizeof(ident)-1)) ){
         ind += rc;
         rc = read ( djm_fd, ident+ind, 1);

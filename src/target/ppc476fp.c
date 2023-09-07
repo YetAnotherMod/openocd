@@ -150,6 +150,11 @@ static int jtag_read_write_register(struct target *target,
     uint8_t data_out_buffer[8] = {0,0,0,0,0,0,0,0};
     uint8_t zeros[8] = {0,0,0,0,0,0,0,0};
 
+    if ( (target->coreid < 0) || (target->coreid > 3) ){
+        LOG_ERROR("incorrect coreid");
+        return ERROR_FAIL;
+    }
+
     // !!! IMPORTANT
     // prevent the JTAG core switching bug
     if (tap_ext->last_coreid != target->coreid) {
@@ -817,7 +822,7 @@ static int read_required_gen_regs(struct target *target) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     struct reg *reg;
     int i;
-    uint32_t value;
+    uint32_t value = 0;
     int ret;
 
     if (target->state != TARGET_HALTED) {
@@ -886,6 +891,8 @@ static int read_required_gen_regs(struct target *target) {
         if (ret != ERROR_OK)
             return ret;
         ret = read_spr_u32(target, SPR_REG_NUM_LR, &value);
+        if (ret != ERROR_OK)
+            return ret;
         set_reg_value_32(ppc476fp->PC_reg, value - 4);
         if (ret != ERROR_OK)
             return ret;

@@ -257,19 +257,23 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
     if (ret!=ERROR_OK){
         return ret;
     }
+    context->target = target;
+    context->prev_L2CDCRAI = L2C_L2BAD_REG;
+    context->prev_l2arraccadr = l2_arraccadr_bad;
+    context->ra = ra;
+    context->rd = rd;
+    context->rai = DCR_L2_BASE_ADDR & DCR_LSB_MASK;
+    context->rdi = (DCR_L2_BASE_ADDR+4) & DCR_LSB_MASK;
+    context->size = 0;
+    context->tag_n = 0;
+    context->lru_n = 0;
+    context->data_n = 0;
     do{
         ret = write_spr_u32(target,SPR_REG_NUM_DCRIPR,DCR_L2_BASE_ADDR&DCRIPR_MASK);
         if (ret!=ERROR_OK){
             break;
         }
         uint32_t context_size;
-        context->target = target;
-        context->prev_L2CDCRAI = L2C_L2BAD_REG;
-        context->prev_l2arraccadr = l2_arraccadr_bad;
-        context->ra = ra;
-        context->rd = rd;
-        context->rai = DCR_L2_BASE_ADDR & DCR_LSB_MASK;
-        context->rdi = (DCR_L2_BASE_ADDR+4) & DCR_LSB_MASK;
         ret = l2_read_u32(context,L2C_L2CNFG0,&context_size);
         if (ret!=ERROR_OK){
             break;
@@ -391,7 +395,7 @@ static inline int l2_read_line(struct l2_context *context, uint32_t set, uint32_
     int ret = ERROR_OK;
     uint32_t ecc_value = 0;
     uint32_t *pecc = ecc?&ecc_value:NULL;
-    l2_read_tag(context,set,way,&info,pecc);
+    ret = l2_read_tag(context,set,way,&info,pecc);
     if (ret != ERROR_OK){
         LOG_ERROR("Can't read tag %i",set);
         return ret;
