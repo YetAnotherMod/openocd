@@ -307,13 +307,6 @@ static int write_gpr_u32(struct target *target, int reg_num, uint32_t data) {
     if ( ppc476fp->current_gpr_values_valid[reg_num] ){
         if ( data == ppc476fp->current_gpr_values[reg_num] ){
             need_full_write = false;
-        }else{
-            int32_t diff = data - ppc476fp->current_gpr_values[reg_num];
-            int16_t diff_16 = (uint16_t)((uint32_t)diff);
-            if(diff_16 == diff){
-                need_full_write = false;
-                ret = stuff_code (target,addi(reg_num,reg_num,diff_16));
-            }
         }
     }
     if (need_full_write){

@@ -226,6 +226,8 @@ static inline int l2_read_prepare(struct l2_context *context, enum L2C_L2REG reg
         context->prev_L2CDCRAI = reg;
     }
     code = mfdcr(context->rd,context->rdi);
+    target_to_ppc476fp(context->target)->gpr_regs[context->rd]->dirty = true;
+    target_to_ppc476fp(context->target)->current_gpr_values_valid[context->rd] = false;
     ret = stuff_code(context->target,code);
     return ret;
 }
@@ -271,6 +273,16 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
     do{
         ret = write_spr_u32(target,SPR_REG_NUM_DCRIPR,DCR_L2_BASE_ADDR&DCRIPR_MASK);
         if (ret!=ERROR_OK){
+            break;
+        }
+        uint32_t rev_id=0;
+        ret = l2_read_u32(context,L2C_L2REVID,&rev_id);
+        if (ret!=ERROR_OK){
+            break;
+        }
+        if (rev_id == 0){
+            LOG_ERROR("incorrect REVID reg. may be error");
+            ret = ERROR_FAIL;
             break;
         }
         uint32_t context_size;
