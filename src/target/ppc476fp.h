@@ -329,6 +329,10 @@ struct ppc476fp_tap_ext {
     int last_coreid; // -1 if the last core id is unknown
 };
 
+struct ppc476fp_prv_conf {
+    uint32_t cache_base;
+};
+
 // used for save/restore/setup pysh memory access
 struct phys_mem_state {
     uint32_t saved_MSR;

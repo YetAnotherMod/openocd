@@ -3213,6 +3213,62 @@ static int ppc476fp_target_create(struct target *target, Jim_Interp *interp) {
     return ERROR_OK;
 }
 
+static int ppc476fp_jim_configure(struct target *target, struct jim_getopt_info *goi){
+
+    struct ppc476fp_prv_conf *pc;
+    int e;
+    enum ppc476fp_prv_conf_param{
+        CFG_L2_DCR_BASE,
+    };
+    static const struct jim_nvp nvp_config_opts[] = {
+        { .name = "-l2-dcr-base",   .value = CFG_L2_DCR_BASE },
+        { .name = NULL, .value = -1 }
+    };
+
+    pc = (struct ppc476fp_prv_conf*)target->private_config;
+    if ( pc == NULL ){
+        pc = calloc(1, sizeof(struct ppc476fp_prv_conf));
+        if ( pc == NULL ){
+            LOG_ERROR("Out of memory");
+            return JIM_ERR;
+        }
+        pc->cache_base = DCR_L2_BASE_ADDR;
+        target->private_config = pc;
+    }
+
+	Jim_SetEmptyResult(goi->interp);
+	struct jim_nvp *n;
+	e = jim_nvp_name2value_obj(goi->interp, nvp_config_opts,
+				goi->argv[0], &n);
+    if ( e != JIM_OK ) return JIM_CONTINUE;
+	e = jim_getopt_obj(goi, NULL);
+	if (e != JIM_OK)
+		return e;
+    switch (n->value){
+    case CFG_L2_DCR_BASE:
+        if ( goi->isconfigure ){
+            Jim_Obj *o_t;
+            long r;
+            e = jim_getopt_obj(goi, &o_t);
+            if ( e!= JIM_OK )
+                return e;
+            e = Jim_GetLong(goi->interp, o_t, &r);
+            if ( e!= JIM_OK )
+                return e;
+            if ((r<0)||(r>0xffffffffu)){
+				Jim_SetResultString(goi->interp,
+					"incorrect DCR addr", -1);
+				return JIM_ERR;
+            }
+            pc->cache_base = r;
+        }else{
+            Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "NO PARAMS");
+        }
+        break;
+    }
+    return JIM_OK;
+}
+
 static int ppc476fp_init_target(struct command_context *cmd_ctx,
                                 struct target *target) {
     LOG_DEBUG("coreid=%i", target->coreid);
@@ -5304,6 +5360,7 @@ struct target_type ppc476fp_target = {
     .target_create = ppc476fp_target_create,
     .init_target = ppc476fp_init_target,
     .examine = ppc476fp_examine,
+    .target_jim_configure = ppc476fp_jim_configure,
 
     .virt2phys = ppc476fp_virt2phys,
     .read_phys_memory = ppc476fp_read_phys_memory,

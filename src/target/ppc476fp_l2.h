@@ -259,19 +259,20 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
     if (ret!=ERROR_OK){
         return ret;
     }
+    uint32_t l2_base = ((struct ppc476fp_prv_conf*)target->private_config)->cache_base;
     context->target = target;
     context->prev_L2CDCRAI = L2C_L2BAD_REG;
     context->prev_l2arraccadr = l2_arraccadr_bad;
     context->ra = ra;
     context->rd = rd;
-    context->rai = DCR_L2_BASE_ADDR & DCR_LSB_MASK;
-    context->rdi = (DCR_L2_BASE_ADDR+4) & DCR_LSB_MASK;
+    context->rai = l2_base & DCR_LSB_MASK;
+    context->rdi = (l2_base+4) & DCR_LSB_MASK;
     context->size = 0;
     context->tag_n = 0;
     context->lru_n = 0;
     context->data_n = 0;
     do{
-        ret = write_spr_u32(target,SPR_REG_NUM_DCRIPR,DCR_L2_BASE_ADDR&DCRIPR_MASK);
+        ret = write_spr_u32(target,SPR_REG_NUM_DCRIPR,l2_base&DCRIPR_MASK);
         if (ret!=ERROR_OK){
             break;
         }
