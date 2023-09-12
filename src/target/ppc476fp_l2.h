@@ -348,9 +348,9 @@ static inline int l2_arracc_read(struct l2_context *context, uint32_t array_addr
     return ret;
 }
 
-static inline int l2_read_lru(struct l2_context *context, uint32_t lru_addr, uint32_t *lru_info){
+static inline int l2_read_lru(struct l2_context *context, uint32_t set, uint32_t *lru_info){
     int ret = ERROR_OK;
-    ret = l2_arracc_read(context,lru_addr<<1,l2_arraccctl_bid_lru);
+    ret = l2_arracc_read(context,set<<1,l2_arraccctl_bid_lru);
     if(ret!=ERROR_OK)
         return ret;
     if (lru_info){
@@ -361,11 +361,12 @@ static inline int l2_read_lru(struct l2_context *context, uint32_t lru_addr, uin
     return ret;
 }
 
-static inline int l2_read_tag(struct l2_context *context, uint32_t tag_addr, uint32_t cache_way, uint32_t *tag_info, uint32_t *tag_ecc){
+static inline int l2_read_tag(struct l2_context *context, uint32_t set, uint32_t cache_way, uint32_t *tag_info, uint32_t *tag_ecc){
     int ret = ERROR_OK;
-    ret = l2_arracc_read(context,tag_addr<<1,l2_arraccctl_bid_tag|(cache_way<<l2_arraccctl_way_ind));
-    if(ret!=ERROR_OK)
+    ret = l2_arracc_read(context,set<<1,l2_arraccctl_bid_tag|(cache_way<<l2_arraccctl_way_ind));
+    if(ret!=ERROR_OK){
         return ret;
+    }
     if (tag_info){
         ret = l2_read_u32(context,L2C_L2ARRACCDO0, tag_info);
         if(ret!=ERROR_OK)
@@ -379,9 +380,9 @@ static inline int l2_read_tag(struct l2_context *context, uint32_t tag_addr, uin
     return ret;
 }
 
-static inline int l2_read_data(struct l2_context *context, uint32_t data_addr, uint32_t cache_way, uint32_t *data_h, uint32_t *data_l, uint32_t *data_ecc){
+static inline int l2_read_data(struct l2_context *context, uint32_t set, uint32_t cache_way, uint32_t dw_ind, uint32_t *data_h, uint32_t *data_l, uint32_t *data_ecc){
     int ret = ERROR_OK;
-    ret = l2_arracc_read(context,data_addr>>3,l2_arraccctl_bid_data|(cache_way<<l2_arraccctl_way_ind)|(0x80>>(data_addr&0x7)));
+    ret = l2_arracc_read(context,(set<<1)|(dw_ind>>3),l2_arraccctl_bid_data|(cache_way<<l2_arraccctl_way_ind)|(0x80>>(dw_ind&0x7)));
     if(ret!=ERROR_OK)
         return ret;
     if (data_h){
@@ -429,7 +430,7 @@ static inline int l2_read_line(struct l2_context *context, uint32_t set, uint32_
             && (valid||read_invalid)
     ){
         for(uint32_t i=0;i<16;++i){
-            l2_read_data(context,set*16+i,way,&line->data[i][0],&line->data[i][1],pecc);
+            l2_read_data(context,set,way,i,&line->data[i][0],&line->data[i][1],pecc);
             line->ecc_data[i]=ecc_value;
         }
     }
