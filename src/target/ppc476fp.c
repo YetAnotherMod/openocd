@@ -157,7 +157,7 @@ static int jtag_read_write_register(struct target *target,
 
     // !!! IMPORTANT
     // prevent the JTAG core switching bug
-    if (tap_ext->last_coreid != target->coreid) {
+    if ((tap_ext->last_coreid != target->coreid) || (target->tap->bypass)) {
         h_u32_to_le(instr_buffer, JTAG_INSTR_CORE_RELOAD | coreid_mask[target->coreid]);
         instr_field.num_bits = target->tap->ir_length;
         instr_field.out_value = instr_buffer;
