@@ -266,29 +266,37 @@ static int djm_init(void){
         return ERROR_FAIL;
     }
     djm_fd = fd;
-    char ident[64];
+    char ident[256];
     unsigned ind = 0;
-    ssize_t wc = write ( djm_fd , "h" , 1 );
-    if ( wc != 1 ){
-        LOG_ERROR("Can't write to fd");
-        return ERROR_FAIL;
+    for (int i = 0; (strcmp(ident,"djmv1\r\n")!=0)&&(i < 128); i++){
+        ind = 0;
+        ssize_t wc = write ( djm_fd , "\0\0h" , 3 );
+        if ( wc != 3 ){
+            LOG_ERROR("Can't write to fd");
+            return ERROR_FAIL;
+        }
+        usleep(1000);
+        ssize_t rc = read ( djm_fd, ident, sizeof(ident)-1);
+        if ( rc < 0 ){
+            LOG_ERROR("Can't write fd");
+            return ERROR_FAIL;
+        }
+        while ( (rc > 0) && (ind < (sizeof(ident)-1)) ){
+            ind += rc;
+            rc = read ( djm_fd, ident+ind, 1);
+        }
+        ident[ind] = '\0';
+        LOG_DEBUG("ident: %s", ident);
     }
-    usleep(1000);
-    ssize_t rc = read ( djm_fd, ident, sizeof(ident)-1);
-    while ( (rc > 0) && (ind < (sizeof(ident)-1)) ){
-        ind += rc;
-        rc = read ( djm_fd, ident+ind, 1);
-    }
-    ident[ind] = '\0';
-    LOG_DEBUG("ident: %s", ident);
 
     if ( strcmp(ident,"djmv1\r\n")!=0 ){
-        char hex[sizeof(ident)*3];
+        char hex[sizeof(ident)*3] = "";
         char *p = hex, *i = ident;
         while(*i){
             p+= sprintf (p,"%02x ",*i++);
         }
         LOG_DEBUG("ident hex: %s", hex);
+        LOG_ERROR("incorrect ident");
         return ERROR_FAIL;
     }
 
