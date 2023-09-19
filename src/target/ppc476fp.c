@@ -408,6 +408,7 @@ static int write_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, i
         code = stw(rt,ra,d);
         break;
     default:
+        code = ori(0,0,0);
         assert(false);
     }
 
@@ -458,6 +459,7 @@ static int read_virt_mem_raw(struct target *target, uint32_t rt, uint32_t ra, in
         code = lwz(rt,ra,d);
         break;
     default:
+        code = ori(0,0,0);
         assert(false);
     }
     target_to_ppc476fp(target)->gpr_regs[rt]->dirty = true;
@@ -1516,6 +1518,7 @@ static int set_watchpoint(struct target *target, struct watchpoint *wp) {
         dac_mask = dacr_mask | dacw_mask;
         break;
     default:
+        dac_mask = 0;
         assert(false);
     }
 
@@ -2499,6 +2502,7 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
         index = (params->tid & 0xFF) ^ ((params->epn >> 12) & 0xC0);
         break;
     default:
+        index = 0;
         assert(false);
     }
 
@@ -2994,7 +2998,7 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
     uint32_t shifted = -32768;
     int ret;
 
-    LOG_DEBUG("coreid=%i, address: 0x%lX, size: %u, count: 0x%X",
+    LOG_DEBUG("coreid=%i, address: %#" PRIx64 ", size: %" PRIu32 ", count: %#" PRIx32,
               target->coreid, address, size, count);
 
     if (target->state != TARGET_HALTED) {
@@ -3041,8 +3045,8 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
     uint32_t shifted = -32768;
     int ret;
 
-    LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
-              address, size, count);
+    LOG_DEBUG("coreid=%i, address: %#" PRIx64 ", size: %" PRIu32 ", count: %#" PRIx32,
+        target->coreid, address, size, count);
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
@@ -3086,8 +3090,8 @@ static int ppc476fp_checksum_memory(struct target *target,
 
 static int ppc476fp_add_breakpoint(struct target *target,
                                    struct breakpoint *breakpoint) {
-    LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid,
-              breakpoint->address, breakpoint->type, breakpoint->length);
+    LOG_DEBUG("coreid=%i, address=%#" PRIx64 ", type=%i, length=%#x",
+            target->coreid, breakpoint->address, breakpoint->type, breakpoint->length);
 
     if (target->state != TARGET_HALTED)
         return ERROR_TARGET_NOT_HALTED;
@@ -3116,7 +3120,7 @@ static int ppc476fp_remove_breakpoint(struct target *target,
                                       struct breakpoint *breakpoint) {
     int ret;
 
-    LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid,
+    LOG_DEBUG("coreid=%i, address=%#" PRIx64 ", type=%i, length=%#x", target->coreid,
               breakpoint->address, breakpoint->type, breakpoint->length);
 
     if (target->state != TARGET_HALTED)
@@ -3144,8 +3148,7 @@ static int ppc476fp_add_watchpoint(struct target *target,
     struct watchpoint *wp;
     int wp_count;
 
-    LOG_DEBUG("coreid=%i, address=0x%08lX, rw=%i, length=%u, value=0x%08X, "
-              "mask=0x%08X",
+    LOG_DEBUG("coreid=%i, address=%#" PRIx64 ", rw=%i, length=%#" PRIx32 ", value=%#" PRIx32 ", mask=%#" PRIx32,
               target->coreid, watchpoint->address, watchpoint->rw,
               watchpoint->length, watchpoint->value, watchpoint->mask);
 
@@ -3176,8 +3179,7 @@ static int ppc476fp_remove_watchpoint(struct target *target,
                                       struct watchpoint *watchpoint) {
     int ret;
 
-    LOG_DEBUG("coreid=%i, address=0x%08lX, rw=%i, length=%u, value=0x%08X, "
-              "mask=0x%08X",
+    LOG_DEBUG("coreid=%i, address=%#" PRIx64 ", rw=%i, length=%#" PRIx32 ", value=%#" PRIx32 ", mask=%#" PRIx32,
               target->coreid, watchpoint->address, watchpoint->rw,
               watchpoint->length, watchpoint->value, watchpoint->mask);
 
@@ -3255,7 +3257,7 @@ static int ppc476fp_jim_configure(struct target *target, struct jim_getopt_info 
             e = Jim_GetLong(goi->interp, o_t, &r);
             if ( e!= JIM_OK )
                 return e;
-            if ((r<0)||(r>0xffffffffu)){
+            if (((unsigned long)r>0xffffffffu)){
 				Jim_SetResultString(goi->interp,
 					"incorrect DCR addr", -1);
 				return JIM_ERR;
@@ -3433,8 +3435,8 @@ static int ppc476fp_read_phys_memory(struct target *target,
     int ret;
     int result = ERROR_OK;
 
-    LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
-              address, size, count);
+    LOG_DEBUG("coreid=%i, address=%#" PRIx64 ", size=%" PRIu32 ", count=%#" PRIx32,
+            target->coreid, address, size, count);
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
@@ -3509,8 +3511,9 @@ static int ppc476fp_write_phys_memory(struct target *target,
     int ret;
     int result = ERROR_OK;
 
-    LOG_DEBUG("coreid=%i, address=0x%lX, size=%u, count=0x%X", target->coreid,
-              address, size, count);
+
+    LOG_DEBUG("coreid=%i, address=%#" PRIx64 ", size=%" PRIu32 ", count=%#" PRIx32,
+            target->coreid, address, size, count);
 
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
