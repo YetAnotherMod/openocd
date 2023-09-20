@@ -160,6 +160,11 @@ struct l2_context{
     uint32_t tag_n;
     uint32_t lru_n;
     uint32_t data_n;
+    uint32_t ra_arraccctl;
+    uint32_t ra_arraccadr;
+    uint32_t ra_arraccdo0;
+    uint32_t ra_arraccdo1;
+    uint32_t ra_arraccdo2;
 };
 
 struct l2_line{
@@ -173,12 +178,33 @@ struct l2_line{
 static inline int l2_write_complete(struct l2_context *context, enum L2C_L2REG reg){
     int ret = ERROR_OK;
     uint32_t code;
+    uint32_t ra;
+    switch ( reg ){
+        case L2C_L2ARRACCCTL:
+            ra = context->ra_arraccctl;
+            break;
+        case L2C_L2ARRACCADR:
+            ra = context->ra_arraccadr;
+            break;
+        case L2C_L2ARRACCDO0:
+            ra = context->ra_arraccdo0;
+            break;
+        case L2C_L2ARRACCDO1:
+            ra = context->ra_arraccdo1;
+            break;
+        case L2C_L2ARRACCDO2:
+            ra = context->ra_arraccdo2;
+            break;
+        default:
+            ra = context->ra;
+            break;
+    }
     if (reg!=context->prev_L2CDCRAI){
-        ret = write_gpr_u32(context->target,context->ra,reg);
+        ret = write_gpr_u32(context->target,ra,reg);
         if (ret!=ERROR_OK){
             return ret;
         }
-        code = mtdcr(context->rai,context->ra);
+        code = mtdcr(context->rai,ra);
         ret = stuff_code(context->target,code);
         if (ret!=ERROR_OK){
             context->prev_L2CDCRAI = L2C_L2BAD_REG;
@@ -212,12 +238,32 @@ static inline int l2_write_u32(struct l2_context *context, enum L2C_L2REG reg, u
 static inline int l2_read_prepare(struct l2_context *context, enum L2C_L2REG reg){
     int ret = ERROR_OK;
     uint32_t code;
+    uint32_t ra;
+    switch ( reg ){
+        case L2C_L2ARRACCCTL:
+            ra = context->ra_arraccctl;
+            break;
+        case L2C_L2ARRACCADR:
+            ra = context->ra_arraccadr;
+            break;
+        case L2C_L2ARRACCDO0:
+            ra = context->ra_arraccdo0;
+            break;
+        case L2C_L2ARRACCDO1:
+            ra = context->ra_arraccdo1;
+            break;
+        case L2C_L2ARRACCDO2:
+            ra = context->ra_arraccdo2;
+            break;
+        default:
+            ra = context->ra;
+            break;
+    }
     if (reg!=context->prev_L2CDCRAI){
-        ret = write_gpr_u32(context->target,context->ra,reg);
-        if (ret!=ERROR_OK){
+        ret = write_gpr_u32(context->target,ra,reg);
+        if (ret!=ERROR_OK)
             return ret;
-        }
-        code = mtdcr(context->rai,context->ra);
+        code = mtdcr(context->rai,ra);
         ret = stuff_code(context->target,code);
         if (ret!=ERROR_OK){
             context->prev_L2CDCRAI = L2C_L2BAD_REG;
@@ -254,7 +300,8 @@ static inline int l2_restore_context(struct l2_context const *context){
     return write_spr_u32(context->target,SPR_REG_NUM_DCRIPR,context->prev_DCRIPR);
 }
 
-static inline int l2_init_context(struct target *target, struct l2_context *context, uint32_t ra, uint32_t rd){
+static inline int l2_init_context(struct target *target, struct l2_context *context, uint32_t ra, uint32_t rd,
+        uint32_t ra_arraccctl, uint32_t ra_arraccadr, uint32_t ra_arraccdo0, uint32_t ra_arraccdo1, uint32_t ra_arraccdo2){
     int ret = read_spr_u32(target,SPR_REG_NUM_DCRIPR,&context->prev_DCRIPR);
     if (ret!=ERROR_OK){
         return ret;
@@ -265,6 +312,11 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
     context->prev_l2arraccadr = l2_arraccadr_bad;
     context->ra = ra;
     context->rd = rd;
+    context->ra_arraccctl = ra_arraccctl;
+    context->ra_arraccadr = ra_arraccadr;
+    context->ra_arraccdo0 = ra_arraccdo0;
+    context->ra_arraccdo1 = ra_arraccdo1;
+    context->ra_arraccdo2 = ra_arraccdo2;
     context->rai = l2_base & DCR_LSB_MASK;
     context->rdi = (l2_base+4) & DCR_LSB_MASK;
     context->size = 0;

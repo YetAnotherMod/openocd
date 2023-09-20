@@ -271,13 +271,13 @@ static int stuff_code(struct target *target, uint32_t code) {
 // происходит после инструкций, изменяющих значене регистра
 static int read_gpr_buf(struct target *target, int reg_num, uint8_t *data) {
     struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
+    ppc476fp->current_gpr_values_valid[reg_num] = false;
     int ret = stuff_code(target, mtspr(SPR_REG_NUM_DBDR,reg_num));
     if (ret != ERROR_OK)
         return ret;
 
     ret = read_DBDR(target, data);
     if ( ret != ERROR_OK ){
-        ppc476fp->current_gpr_values_valid[reg_num] = false;
         return ret;
     }
     ppc476fp->current_gpr_values[reg_num] = le_to_h_u32(data);
@@ -299,7 +299,7 @@ static int read_gpr_u32(struct target *target, int reg_num, uint32_t *data) {
 // автоматически помечает регистр как dirty для того, чтобы заменить его
 // значение на эталонное при снятии halt
 static int write_gpr_u32(struct target *target, int reg_num, uint32_t data) {
-    int32_t data_signed = data;
+    int32_t data_signed = (int32_t)data;
     bool need_full_write = true;
     struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
     int ret = ERROR_OK;
@@ -4953,7 +4953,8 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
 
     struct target *target = get_current_target(CMD_CTX);
     struct l2_context context;
-    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data);
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            29,28,27,26,25);
     if (ret==ERROR_OK){
         command_print_sameline(CMD, "Cache size: ");
         switch (context.size)
