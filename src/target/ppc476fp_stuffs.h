@@ -21,6 +21,8 @@ enum stuff_codes{
     STUFF_CODE_ADDIS = 0x3c000000,
     STUFF_CODE_ADDI = 0x38000000,
     STUFF_CODE_ORI = 0x60000000,
+    STUFF_CODE_XORI = 0x68000000,
+    STUFF_CODE_XORIS = 0x6c000000,
     // jump
     STUFF_CODE_B = 0x48000000,
     STUFF_CODE_BCLR = 0x4c000020,
@@ -179,6 +181,14 @@ static inline uint32_t li(uint32_t rx, int16_t value){
 
 static inline uint32_t ori(uint32_t ra, uint32_t rs, uint16_t si){
     return (((uint32_t)STUFF_CODE_ORI) | (rs<<21) | (ra<<16) | si );
+}
+
+static inline uint32_t xori(uint32_t ra, uint32_t rs, uint16_t si){
+    return (((uint32_t)STUFF_CODE_XORI) | (rs<<21) | (ra<<16) | si );
+}
+
+static inline uint32_t xoris(uint32_t ra, uint32_t rs, uint16_t si){
+    return (((uint32_t)STUFF_CODE_XORIS) | (rs<<21) | (ra<<16) | si );
 }
 
 static inline uint32_t stfd(uint32_t frs, uint32_t ra, int16_t d){

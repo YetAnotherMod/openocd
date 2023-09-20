@@ -307,6 +307,15 @@ static int write_gpr_u32(struct target *target, int reg_num, uint32_t data) {
     if ( ppc476fp->current_gpr_values_valid[reg_num] ){
         if ( data == ppc476fp->current_gpr_values[reg_num] ){
             need_full_write = false;
+        }else{
+            uint32_t xor_data = data^ppc476fp->current_gpr_values[reg_num];
+            if ( xor_data<<16 == 0 ){
+                ret = stuff_code(target, xoris(reg_num,reg_num,xor_data>>16));
+                need_full_write = false;
+            }else if ( xor_data>>16 == 0 ){
+                ret = stuff_code(target, xori(reg_num,reg_num,xor_data&0xffff));
+                need_full_write = false;
+            }
         }
     }
     if (need_full_write){
@@ -1233,6 +1242,7 @@ static void build_reg_caches(struct target *target) {
         ppc476fp->gpr_regs[i] = fill_reg(
             target, all_index++, gen_regs++, names[i], REG_TYPE_UINT32,
             32, &ppc476fp_gen_reg_type, "org.gnu.gdb.power.core"); // R0-R31
+        ppc476fp->current_gpr_values_valid[i] = false;
     }
 
     for (i = 0; i < FPR_REG_COUNT; ++i) {
