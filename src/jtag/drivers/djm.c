@@ -6,6 +6,7 @@
 #include "helper/system.h"
 #include <jtag/interface.h>
 #include <termios.h>
+#include <sys/stat.h>
 
 static int djm_fd = -1;
 static char *djm_tty = NULL;
@@ -30,7 +31,13 @@ static void packet_read(uint8_t *data, uint16_t count){
     while ( ind < len ){
         ssize_t rc = read(djm_fd,data+ind,len-ind);
         LOG_DEBUG_IO("rc: %li",rc);
-        if(rc==-1){
+        if(rc == 0){
+            struct stat statbuf;
+            if ( (fstat(djm_fd, &statbuf) !=0) || (statbuf.st_nlink == 0)){
+                LOG_ERROR ("tty broken");
+                exit(-1);
+            }
+        }else if(rc<0){
             LOG_ERROR ("Can't read fd %i %s",errno,strerror(errno));
             exit(-1);
         }
@@ -234,18 +241,18 @@ static int djm_init(void){
     LOG_DEBUG("Initializing DJM driver");
     if ( djm_tty == NULL ){
         LOG_ERROR("No tty specified");
-        return ERROR_FAIL;
+        return ERROR_JTAG_INIT_FAILED;
     }
     LOG_DEBUG("Opening %s",djm_tty);
     int fd = open(djm_tty,O_RDWR | O_NOCTTY);
     if ( fd == -1 ){
         LOG_ERROR("Can't open %s, reason: %s",djm_tty, strerror(errno));
-        return ERROR_FAIL;
+        return ERROR_JTAG_INIT_FAILED;
     }
 	struct termios t_opt;
 	if (tcgetattr(fd, &t_opt) != 0){
         LOG_ERROR("Can't tcgetattr");
-        return ERROR_FAIL;
+        return ERROR_JTAG_INIT_FAILED;
     }
 	
     t_opt.c_cflag |= (CLOCAL | CREAD);
@@ -263,7 +270,7 @@ static int djm_init(void){
     
     if (tcsetattr(fd, TCSADRAIN, &t_opt) != 0) {
         LOG_ERROR("Can't tcsetattr");
-        return ERROR_FAIL;
+        return ERROR_JTAG_INIT_FAILED;
     }
     djm_fd = fd;
     char ident[256];
@@ -273,13 +280,12 @@ static int djm_init(void){
         ssize_t wc = write ( djm_fd , "\0\0h" , 3 );
         if ( wc != 3 ){
             LOG_ERROR("Can't write to fd");
-            return ERROR_FAIL;
+            return ERROR_JTAG_INIT_FAILED;
         }
-        usleep(1000);
         ssize_t rc = read ( djm_fd, ident, sizeof(ident)-1);
         if ( rc < 0 ){
-            LOG_ERROR("Can't write fd");
-            return ERROR_FAIL;
+            LOG_ERROR("Can't read from fd");
+            return ERROR_JTAG_INIT_FAILED;
         }
         while ( (rc > 0) && (ind < (sizeof(ident)-1)) ){
             ind += rc;
@@ -297,7 +303,12 @@ static int djm_init(void){
         }
         LOG_DEBUG("ident hex: %s", hex);
         LOG_ERROR("incorrect ident");
-        return ERROR_FAIL;
+        return ERROR_JTAG_INIT_FAILED;
+    }
+	t_opt.c_cc[VMIN] = 1;
+    if (tcsetattr(djm_fd, TCSADRAIN, &t_opt) != 0) {
+        LOG_ERROR("Can't tcsetattr");
+        return ERROR_JTAG_INIT_FAILED;
     }
 
     return ERROR_OK;
