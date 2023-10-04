@@ -86,14 +86,31 @@ static int packet_wait_time(uint16_t count){
     return ERROR_OK;
 }
 
-//static int packet_set_speed(uint16_t speed){
-    //packet_size('%',speed);
-    //return ERROR_OK;
-//}
+static int packet_set_speed(uint16_t speed){
+    packet_size('%',speed);
+    return ERROR_OK;
+}
 
-//static int djm_speed(int speed){
-    //return packet_set_speed(speed);
-//}
+static int djm_speed(int speed){
+    return packet_set_speed(speed);
+}
+
+static int djm_khz(int khz, int *speed){
+    int speed_ = 100000 / khz;
+    speed_ = speed_/2 + speed_%2;
+    if ( speed_ <= 0 ){
+        speed_ = 1;
+    }
+    *speed = speed_;
+    return ERROR_OK;
+}
+
+static int djm_speed_div(int speed, int *khz){
+    int khz_ = 100000 / speed;
+    khz_ = khz_/2 + khz_%2;
+    *khz = khz_;
+    return ERROR_OK;
+}
 
 static int djm_statemove(tap_state_t state){
     LOG_DEBUG_IO("statemove from %s to %s",tap_state_name(tap_get_state()),tap_state_name(state));
@@ -377,7 +394,9 @@ struct adapter_driver djm_adapter_driver = {
     .init = djm_init,
     .quit = djm_quit,
     .reset = djm_reset,
-    //.speed = djm_speed,
+    .speed = djm_speed,
+    .khz = djm_khz,
+    .speed_div = djm_speed_div,
 
     .jtag_ops = &djm_interface,
 };
