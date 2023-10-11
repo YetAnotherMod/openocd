@@ -5,10 +5,19 @@
 
 #include "helper/system.h"
 #include <jtag/interface.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <termios.h>
 #include <sys/stat.h>
+#endif
 
+#ifdef _WIN32
+static HANDLE djm_fd = INVALID_HANDLE_VALUE;
+#else
 static int djm_fd = -1;
+#endif
 static char *djm_tty = NULL;
 static uint8_t djm_buff[1024];
 static uint16_t djm_buff_len = 0;
@@ -25,28 +34,50 @@ static void packet_data(const uint8_t *data, uint16_t count){
     djm_buff_len+=len;
 }
 
+#ifdef _WIN32
+static DWORD com_read(uint8_t *data, uint16_t count){
+    DWORD rc = 0;
+    BOOL res = ReadFile(djm_fd,data,count,&rc,NULL);
+    if(res == FALSE){
+        LOG_ERROR ("tty broken");
+        exit(-1);
+    }
+    return rc;
+}
+#else
+static ssize_t com_read(uint8_t *data, uint16_t count){
+    ssize_t rc = read(djm_fd,data,count);
+    LOG_DEBUG_IO("rc: %li",rc);
+    if(rc == 0){
+        struct stat statbuf;
+        if ( (fstat(djm_fd, &statbuf) !=0) || (statbuf.st_nlink == 0)){
+            LOG_ERROR ("tty broken");
+            exit(-1);
+        }
+    }else if(rc<0){
+        LOG_ERROR ("Can't read fd %i %s",errno,strerror(errno));
+        exit(-1);
+    }
+    return rc;
+}
+#endif
+
 static void packet_read(uint8_t *data, uint16_t count){
     int len = count/8 + (count%8?1:0);
     uint16_t ind = 0;
     while ( ind < len ){
-        ssize_t rc = read(djm_fd,data+ind,len-ind);
-        LOG_DEBUG_IO("rc: %li",rc);
-        if(rc == 0){
-            struct stat statbuf;
-            if ( (fstat(djm_fd, &statbuf) !=0) || (statbuf.st_nlink == 0)){
-                LOG_ERROR ("tty broken");
-                exit(-1);
-            }
-        }else if(rc<0){
-            LOG_ERROR ("Can't read fd %i %s",errno,strerror(errno));
-            exit(-1);
-        }
-        ind += rc;
+        ind += com_read(data+ind,len-ind);
     }
 }
 
 static void packet_flush (void){
-    if ( write(djm_fd, djm_buff, djm_buff_len) != djm_buff_len ){
+#ifdef _WIN32
+    DWORD wc = 0;
+    WriteFile(djm_fd, djm_buff, djm_buff_len, &wc, 0);
+#else
+    ssize_t wc = write(djm_fd, djm_buff, djm_buff_len);
+#endif
+    if ( wc != djm_buff_len ){
         LOG_ERROR ("Can't write to fd");
         exit(-1);
     }
@@ -196,9 +227,6 @@ static int djm_tms(struct tms_command *tms){
 
 static int djm_execute_queue (void){
     struct jtag_command *cmd = jtag_command_queue;  /* currently processed command */
-    if ( djm_fd == -1 ){
-        LOG_ERROR ("djm not initialized");
-    }
     while (cmd){
         switch (cmd->type) {
 
@@ -261,6 +289,32 @@ static int djm_init(void){
         return ERROR_JTAG_INIT_FAILED;
     }
     LOG_DEBUG("Opening %s",djm_tty);
+#ifdef _WIN32
+    HANDLE fd = CreateFileA(djm_tty,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL);
+    if ( fd == INVALID_HANDLE_VALUE ){
+        LOG_ERROR("Can't open %s", djm_tty);
+        return ERROR_JTAG_INIT_FAILED;
+    }
+    COMMTIMEOUTS commtimeouts;
+
+    commtimeouts.ReadIntervalTimeout = 0;
+    commtimeouts.ReadTotalTimeoutMultiplier = 0;
+    commtimeouts.ReadTotalTimeoutConstant = 100;
+    commtimeouts.WriteTotalTimeoutMultiplier = 0;
+    commtimeouts.WriteTotalTimeoutConstant = 100;
+    if (SetCommTimeouts(fd, &commtimeouts) == FALSE){
+        LOG_ERROR("Can't SetCommTimeouts %li", GetLastError());
+        return ERROR_JTAG_INIT_FAILED;
+    }
+    djm_fd = fd;
+
+#else
     int fd = open(djm_tty,O_RDWR | O_NOCTTY);
     if ( fd == -1 ){
         LOG_ERROR("Can't open %s, reason: %s",djm_tty, strerror(errno));
@@ -290,23 +344,22 @@ static int djm_init(void){
         return ERROR_JTAG_INIT_FAILED;
     }
     djm_fd = fd;
+#endif
     char ident[256];
     unsigned ind = 0;
     for (int i = 0; (strcmp(ident,"djmv1\r\n")!=0)&&(i < 128); i++){
         ind = 0;
-        ssize_t wc = write ( djm_fd , "\0\0h" , 3 );
-        if ( wc != 3 ){
-            LOG_ERROR("Can't write to fd");
-            return ERROR_JTAG_INIT_FAILED;
-        }
-        ssize_t rc = read ( djm_fd, ident, sizeof(ident)-1);
-        if ( rc < 0 ){
-            LOG_ERROR("Can't read from fd");
-            return ERROR_JTAG_INIT_FAILED;
-        }
+        djm_buff_len = 3;
+        djm_buff[0] = 0;
+        djm_buff[1] = 0;
+        djm_buff[2] = 'h';
+
+        packet_flush();
+
+        ssize_t rc = com_read ( (unsigned char *)ident, sizeof(ident)-1);
         while ( (rc > 0) && (ind < (sizeof(ident)-1)) ){
             ind += rc;
-            rc = read ( djm_fd, ident+ind, 1);
+            rc = com_read ( (unsigned char *)(ident+ind), 1);
         }
         ident[ind] = '\0';
         LOG_DEBUG("ident: %s", ident);
@@ -322,20 +375,23 @@ static int djm_init(void){
         LOG_ERROR("incorrect ident");
         return ERROR_JTAG_INIT_FAILED;
     }
+#ifndef _WIN32
 	t_opt.c_cc[VMIN] = 1;
     if (tcsetattr(djm_fd, TCSADRAIN, &t_opt) != 0) {
         LOG_ERROR("Can't tcsetattr");
         return ERROR_JTAG_INIT_FAILED;
     }
+#endif
 
     return ERROR_OK;
 }
 
 static int djm_quit(void){
-    if ( close ( djm_fd ) ){
-        LOG_ERROR("Can't close tty: %s", strerror(errno));
-        return ERROR_FAIL;
-    }
+#ifdef _WIN32
+    CloseHandle ( djm_fd );
+#else
+    close ( djm_fd );
+#endif
     free (djm_tty);
     djm_tty = NULL;
     return ERROR_OK;
@@ -343,11 +399,8 @@ static int djm_quit(void){
 
 static int djm_reset(int trst, int srst){
 	char c = 'r' + ((trst ? 0x2 : 0x0) | (srst ? 0x1 : 0x0));
-    ssize_t bw = write(djm_fd,&c,1);
-    if ( bw != 1 ){
-        LOG_ERROR("Can't send reset");
-        return ERROR_FAIL;
-    }
+    djm_buff[djm_buff_len++] = c;
+    packet_flush();
     return ERROR_OK;
 }
 
