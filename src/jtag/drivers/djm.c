@@ -18,21 +18,11 @@ static HANDLE djm_fd = INVALID_HANDLE_VALUE;
 #else
 static int djm_fd = -1;
 #endif
+
+#define DJM_BUFF_SIZE 1024
 static char *djm_tty = NULL;
-static uint8_t djm_buff[1024];
+static uint8_t *djm_buff = NULL;
 static uint16_t djm_buff_len = 0;
-
-static void packet_size(char c, uint16_t count){
-    djm_buff[djm_buff_len++] = c;
-    djm_buff[djm_buff_len++] = count&0xff;
-    djm_buff[djm_buff_len++] = count>>8;
-}
-
-static void packet_data(const uint8_t *data, uint16_t count){
-    int len = count/8 + (count%8?1:0);
-    memcpy(djm_buff+djm_buff_len,data,len);
-    djm_buff_len+=len;
-}
 
 #ifdef _WIN32
 static DWORD com_read(uint8_t *data, uint16_t count){
@@ -82,6 +72,23 @@ static void packet_flush (void){
         exit(-1);
     }
     djm_buff_len = 0;
+}
+
+static void packet_size(char c, uint16_t count){
+    unsigned len = count/8 + (count%8?1:0);
+    if (djm_buff_len+len+3>=DJM_BUFF_SIZE){
+        packet_flush();
+        djm_buff_len = 0;
+    }
+    djm_buff[djm_buff_len++] = c;
+    djm_buff[djm_buff_len++] = count&0xff;
+    djm_buff[djm_buff_len++] = count>>8;
+}
+
+static void packet_data(const uint8_t *data, uint16_t count){
+    int len = count/8 + (count%8?1:0);
+    memcpy(djm_buff+djm_buff_len,data,len);
+    djm_buff_len+=len;
 }
 
 static int packet_move (const uint8_t *data, uint16_t count){
@@ -184,7 +191,7 @@ static int djm_pathmove(struct pathmove_command *pathmove){
     }
     return ERROR_OK;
 }
-static int djm_scan(struct scan_command *scan){
+static int djm_scan_send(struct scan_command *scan){
     uint8_t *buffer;
     int retval = ERROR_OK;
     uint16_t scan_size = jtag_build_buffer(scan, &buffer);
@@ -207,7 +214,14 @@ static int djm_scan(struct scan_command *scan){
     };
     tap_set_state(scan->ir_scan?TAP_IRPAUSE:TAP_DRPAUSE);
     djm_statemove(scan->end_state);
-    packet_flush();
+    free(buffer);
+    return retval;
+}
+static int djm_scan_recive(struct scan_command *scan){
+    uint8_t *buffer;
+    int retval = ERROR_OK;
+    enum scan_type type = jtag_scan_type(scan);
+    uint16_t scan_size = jtag_build_buffer(scan, &buffer);
     if ( ( type == SCAN_IO ) || ( type == SCAN_IN ) ){
         packet_read(buffer,scan_size);
     }
@@ -226,58 +240,91 @@ static int djm_tms(struct tms_command *tms){
 }
 
 static int djm_execute_queue (void){
-    struct jtag_command *cmd = jtag_command_queue;  /* currently processed command */
-    while (cmd){
-        switch (cmd->type) {
+    struct jtag_command *cmd;
+    struct jtag_command *cmd_first = jtag_command_queue;
 
-            case JTAG_RUNTEST:
-                LOG_DEBUG_IO("RUNTEST");
-                if (djm_runtest(cmd->cmd.runtest) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+    while(cmd_first){
+        cmd = cmd_first;
+        unsigned response_len = 0;
+        bool response_ovf = false;
+        while (cmd && ! response_ovf){
+            switch (cmd->type) {
 
-            case JTAG_STABLECLOCKS:
-                LOG_DEBUG_IO("STABLE_CLOCKS");
-                if (djm_stableclocks(cmd->cmd.stableclocks) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+                case JTAG_RUNTEST:
+                    LOG_DEBUG_IO("RUNTEST");
+                    if (djm_runtest(cmd->cmd.runtest) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
 
-            case JTAG_TLR_RESET:
-                LOG_DEBUG_IO("TLR_RESET");
-                if (djm_statemove(cmd->cmd.statemove->end_state) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+                case JTAG_STABLECLOCKS:
+                    LOG_DEBUG_IO("STABLE_CLOCKS");
+                    if (djm_stableclocks(cmd->cmd.stableclocks) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
 
-            case JTAG_PATHMOVE:
-                LOG_DEBUG_IO("PATHMOVE");
-                if (djm_pathmove(cmd->cmd.pathmove) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+                case JTAG_TLR_RESET:
+                    LOG_DEBUG_IO("TLR_RESET");
+                    if (djm_statemove(cmd->cmd.statemove->end_state) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
 
-            case JTAG_SCAN:
-                LOG_DEBUG_IO("SCAN");
-                if (djm_scan(cmd->cmd.scan) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+                case JTAG_PATHMOVE:
+                    LOG_DEBUG_IO("PATHMOVE");
+                    if (djm_pathmove(cmd->cmd.pathmove) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
 
-            case JTAG_SLEEP:
-                LOG_DEBUG_IO("SLEEP");
-                if (djm_sleep(cmd->cmd.sleep) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+                case JTAG_SCAN:
+                    {
+                        LOG_DEBUG_IO("SCAN");
+                        unsigned len = jtag_scan_size(cmd->cmd.scan);
+                        if ( jtag_scan_type(cmd->cmd.scan) == SCAN_OUT)
+                            len = 0;
+                        else
+                            len = len/8+(len%8?1:0);
+                        if ( len + response_len < DJM_BUFF_SIZE ){
+                            if (djm_scan_send(cmd->cmd.scan) != ERROR_OK)
+                                return ERROR_FAIL;
+                            response_len += len;
+                        }else{
+                            response_ovf = true;
+                        }
+                    }
+                    break;
 
-            case JTAG_TMS:
-                LOG_DEBUG_IO("TMS");
-                if (djm_tms(cmd->cmd.tms) != ERROR_OK)
-                    return ERROR_FAIL;
-                break;
+                case JTAG_SLEEP:
+                    LOG_DEBUG_IO("SLEEP");
+                    if (djm_sleep(cmd->cmd.sleep) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
 
-            default:
-                LOG_ERROR("BUG: unknown JTAG command type encountered");
-                exit(-1);
+                case JTAG_TMS:
+                    LOG_DEBUG_IO("TMS");
+                    if (djm_tms(cmd->cmd.tms) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
+
+                default:
+                    LOG_ERROR("BUG: unknown JTAG command type encountered");
+                    exit(-1);
+            }
+            if ( !response_ovf )
+                cmd = cmd->next;
         }
         packet_flush();
-        cmd = cmd->next;
+        for (struct jtag_command *cur = cmd_first ; cur != cmd ; cur = cur-> next){
+            switch (cur->type) {
+                case JTAG_SCAN:
+                    LOG_DEBUG_IO("SCAN");
+                    if (djm_scan_recive(cur->cmd.scan) != ERROR_OK)
+                        return ERROR_FAIL;
+                    break;
+
+                default:
+                    break;
+            }
+        }
+        cmd_first = cmd;
     }
     return ERROR_OK;
 }
@@ -289,6 +336,7 @@ static int djm_init(void){
         return ERROR_JTAG_INIT_FAILED;
     }
     LOG_DEBUG("Opening %s",djm_tty);
+    djm_buff = malloc(DJM_BUFF_SIZE);
 #ifdef _WIN32
     HANDLE fd = CreateFileA(djm_tty,
             GENERIC_READ | GENERIC_WRITE,
@@ -394,6 +442,8 @@ static int djm_quit(void){
 #endif
     free (djm_tty);
     djm_tty = NULL;
+    free (djm_buff);
+    djm_buff = NULL;
     return ERROR_OK;
 }
 
