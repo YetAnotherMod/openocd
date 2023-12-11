@@ -331,6 +331,7 @@ struct ppc476fp_tap_ext {
 
 struct ppc476fp_prv_conf {
     uint32_t cache_base;
+    bool use_gpr_xor_optimization;
 };
 
 // used for save/restore/setup pysh memory access

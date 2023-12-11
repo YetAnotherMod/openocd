@@ -305,16 +305,38 @@ static int write_gpr_u32(struct target *target, int reg_num, uint32_t data) {
     int ret = ERROR_OK;
     ppc476fp->gpr_regs[reg_num]->dirty = true;
     if ( ppc476fp->current_gpr_values_valid[reg_num] ){
-        if ( data == ppc476fp->current_gpr_values[reg_num] ){
+        uint32_t curr = ppc476fp->current_gpr_values[reg_num];
+        if ( data == curr ){
             need_full_write = false;
         }else{
-            uint32_t xor_data = data^ppc476fp->current_gpr_values[reg_num];
-            if ( xor_data<<16 == 0 ){
-                ret = stuff_code(target, xoris(reg_num,reg_num,xor_data>>16));
-                need_full_write = false;
-            }else if ( xor_data>>16 == 0 ){
-                ret = stuff_code(target, xori(reg_num,reg_num,xor_data&0xffff));
-                need_full_write = false;
+            struct ppc476fp_prv_conf *pc = (struct ppc476fp_prv_conf*)target->private_config;
+            uint32_t xor_data = data ^ curr;
+            if ( pc->use_gpr_xor_optimization ){
+                if ( xor_data<<16 == 0 ){
+                    ret = stuff_code(target, xoris(reg_num,reg_num,xor_data>>16));
+                    need_full_write = false;
+                }else if ( xor_data>>16 == 0 ){
+                    ret = stuff_code(target, xori(reg_num,reg_num,xor_data&0xffff));
+                    need_full_write = false;
+                }
+            }else{
+                if ( (xor_data & 0xffff0000) == 0 ){
+                    if ( (curr | xor_data) == data ){
+                        ret = stuff_code(target, ori(reg_num,reg_num,xor_data));
+                        need_full_write = false;
+                    }else if ( (curr & (~xor_data)) == data ){
+                        ret = stuff_code(target, andi(reg_num,reg_num,(~xor_data&0xffff)));
+                        need_full_write = false;
+                    }
+                } else if ( (xor_data & 0xffff) == 0 ){
+                    if ( (curr | xor_data) == data ){
+                        ret = stuff_code(target, oris(reg_num,reg_num,xor_data>>16));
+                        need_full_write = false;
+                    }else if ( (curr & (~xor_data)) == data ){
+                        ret = stuff_code(target, andis(reg_num,reg_num,(~xor_data)>>16));
+                        need_full_write = false;
+                    }
+                }
             }
         }
     }
@@ -3231,9 +3253,11 @@ static int ppc476fp_jim_configure(struct target *target, struct jim_getopt_info 
     int e;
     enum ppc476fp_prv_conf_param{
         CFG_L2_DCR_BASE,
+        CFG_USE_GPR_XOR_OPTIMIZATION,
     };
     static const struct jim_nvp nvp_config_opts[] = {
-        { .name = "-l2-dcr-base",   .value = CFG_L2_DCR_BASE },
+        { .name = "-l2-dcr-base",           .value = CFG_L2_DCR_BASE },
+        { .name = "-gpr-xor-optimization",  .value = CFG_USE_GPR_XOR_OPTIMIZATION },
         { .name = NULL, .value = -1 }
     };
 
@@ -3273,6 +3297,21 @@ static int ppc476fp_jim_configure(struct target *target, struct jim_getopt_info 
 				return JIM_ERR;
             }
             pc->cache_base = r;
+        }else{
+            Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "NO PARAMS");
+        }
+        break;
+    case CFG_USE_GPR_XOR_OPTIMIZATION:
+        if ( goi->isconfigure ){
+            Jim_Obj *o_t;
+            int r;
+            e = jim_getopt_obj(goi, &o_t);
+            if ( e!= JIM_OK )
+                return e;
+            e = Jim_GetBoolean(goi->interp, o_t, &r);
+            if ( e!= JIM_OK )
+                return e;
+            pc->use_gpr_xor_optimization = r;
         }else{
             Jim_WrongNumArgs(goi->interp, goi->argc, goi->argv, "NO PARAMS");
         }
@@ -3935,12 +3974,9 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_read_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
 
-    ret = read_DCR(target, addr, &data);
+    int ret = read_DCR(target, addr, &data);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -3963,12 +3999,9 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_get_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
 
-    ret = read_DCR(target, addr, &data);
+    int ret = read_DCR(target, addr, &data);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -3991,17 +4024,10 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_write_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = write_DCR(target, addr, data);
+    int ret = write_DCR(target, addr, data);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4023,17 +4049,10 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_or_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = read_DCR(target, addr, &read);
+    int ret = read_DCR(target, addr, &read);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4060,17 +4079,10 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_xor_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = read_DCR(target, addr, &read);
+    int ret = read_DCR(target, addr, &read);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4097,17 +4109,10 @@ COMMAND_HANDLER(ppc476fp_handle_dcr_and_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = read_DCR(target, addr, &read);
+    int ret = read_DCR(target, addr, &read);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4133,12 +4138,9 @@ COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
 
-    ret = read_spr_u32(target, addr, &data);
+    int ret = read_spr_u32(target, addr, &data);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4161,12 +4163,9 @@ COMMAND_HANDLER(ppc476fp_handle_spr_get_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
 
-    ret = read_spr_u32(target, addr, &data);
+    int ret = read_spr_u32(target, addr, &data);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4189,17 +4188,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = write_spr_u32(target, addr, data);
+    int ret = write_spr_u32(target, addr, data);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4221,17 +4213,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = read_spr_u32(target, addr, &read);
+    int ret = read_spr_u32(target, addr, &read);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4258,17 +4243,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = read_spr_u32(target, addr, &read);
+    int ret = read_spr_u32(target, addr, &read);
     if (ret != ERROR_OK) {
         return ret;
     }
@@ -4295,17 +4273,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    int ret;
-    ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
-    ret = parse_u32(CMD_ARGV[1], &data);
-    if (ret != ERROR_OK) {
-        return ret;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
-    ret = read_spr_u32(target, addr, &read);
+    int ret = read_spr_u32(target, addr, &read);
     if (ret != ERROR_OK) {
         return ret;
     }
