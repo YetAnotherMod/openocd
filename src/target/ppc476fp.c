@@ -575,7 +575,7 @@ static int write_spr_u32(struct target *target, int spr_num, uint32_t data) {
 // работать.
 static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
 
-    static const uint64_t bad = 0xbabadedababadedaull;
+    static const uint64_t bad = 0x7ff00000babadedaull;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint8_t value_m[8];
     int ret;
@@ -1025,6 +1025,7 @@ static int read_required_fpu_regs(struct target *target) {
                 h_u64_to_le(reg->value, value);
                 reg->valid = true;
             } else if (ret == ERROR_TARGET_RESOURCE_NOT_AVAILABLE){
+                h_u64_to_le(reg->value, value);
                 reg->valid = false;
             } else {
                 return ret;
