@@ -95,6 +95,9 @@ enum SPR_REG_NUM {
     SPR_REG_NUM_TBL_W = 284,
     SPR_REG_NUM_TBU_R = 269,
     SPR_REG_NUM_TBU_W = 285,
+    SPR_REG_NUM_CCR0 = 947,
+    SPR_REG_NUM_CCR1 = 888,
+    SPR_REG_NUM_CCR2 = 889,
 };
 
 enum DCR_bits {

@@ -3895,6 +3895,37 @@ COMMAND_HANDLER(ppc476fp_handle_tlb_drop_all_command) {
 
     return flush_registers(target);
 }
+COMMAND_HANDLER(ppc476fp_handle_tlb_drop_shadow_command){
+    uint32_t saved_CCR2;
+    struct target *target = get_current_target(CMD_CTX);
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    int ret = read_spr_u32(target, SPR_REG_NUM_CCR2, &saved_CCR2);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("Can't read CCR2");
+        return ret;
+    }
+    ret = write_spr_u32(target, SPR_REG_NUM_CCR2, saved_CCR2&0xf7ffffffu);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("Can't write CCR2");
+        return ret;
+    }
+    ret = stuff_code(target, isync());
+    if (ret != ERROR_OK) {
+        LOG_ERROR("Can't execute isync");
+        return ret;
+    }
+    ret = write_spr_u32(target, SPR_REG_NUM_CCR2, saved_CCR2);
+    if (ret != ERROR_OK) {
+        LOG_ERROR("Can't write CCR2");
+        return ret;
+    }
+    return ERROR_OK;
+}
 
 COMMAND_HANDLER(ppc476fp_handle_status_command) {
     struct target *target = get_current_target(CMD_CTX);
@@ -5016,6 +5047,11 @@ static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
       .mode = COMMAND_EXEC,
       .usage = "",
       .help = "delete all UTLB records"},
+     {.name = "shadow",
+      .handler = ppc476fp_handle_tlb_drop_shadow_command,
+      .mode = COMMAND_EXEC,
+      .usage = "",
+      .help = "delete shadow tlb entryes"},
      COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration ppc476fp_tlb_exec_command_handlers[] =
