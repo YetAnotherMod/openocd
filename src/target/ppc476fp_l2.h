@@ -306,6 +306,12 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
     if (ret!=ERROR_OK){
         return ret;
     }
+    assert ( rd != ra );
+    assert ( rd != ra_arraccctl );
+    assert ( rd != ra_arraccadr );
+    assert ( rd != ra_arraccdo0 );
+    assert ( rd != ra_arraccdo1 );
+    assert ( rd != ra_arraccdo2 );
     uint32_t l2_base = ((struct ppc476fp_prv_conf*)target->private_config)->cache_base;
     context->target = target;
     context->prev_L2CDCRAI = L2C_L2BAD_REG;
