@@ -4783,10 +4783,91 @@ static unsigned int addr_to_tag(struct l2_context *context, uint64_t addr){
     return (addr/128)>>context->tag_n;
 }
 
+static void cache_l2_print_lru(struct command_invocation *cmd, int set, uint32_t lru_info){
+    command_print(cmd, "set % 4i, LRU: %02x, Lock Bits: %x(%x), Inclusion Bits: %02x(%02x) [lru reg: %x]"
+        ,set
+        ,(lru_info>>26)&0x3f
+        ,(lru_info>>18)&0xf, (lru_info>>22)&0xf
+        ,(lru_info>>2)&0xff, (lru_info>>10)&0xff
+        ,lru_info);
+}
+
+static void cache_l2_print_line(struct command_invocation *cmd, struct l2_line *line, int way, int ecc){
+    static const char line_state_strings[8][3] = {"I ","--","S ","SL","E ","T ","M ","MU"};
+    int subline = 0;
+    if ( ecc ){
+        command_print(cmd,"Way %i: state: %s, phys addr: %03x_%08x [tag reg: %08x(%02x)]:"
+                ,way
+                ,line_state_strings[((uint32_t)line->line_state)>>l2_cache_state_shift]
+                ,(uint32_t)(line->base_addr>>32),(uint32_t)(line->base_addr)
+                ,line->tag_info,line->ecc_tag);
+        command_print(cmd," [+00] %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x)",
+                line->data[subline+0][0],line->data[subline+0][1],line->ecc_data[subline+0],
+                line->data[subline+1][0],line->data[subline+1][1],line->ecc_data[subline+1],
+                line->data[subline+2][0],line->data[subline+2][1],line->ecc_data[subline+2],
+                line->data[subline+3][0],line->data[subline+3][1],line->ecc_data[subline+3]
+        );
+        subline+=4;
+        command_print(cmd," [+20] %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x)",
+                line->data[subline+0][0],line->data[subline+0][1],line->ecc_data[subline+0],
+                line->data[subline+1][0],line->data[subline+1][1],line->ecc_data[subline+1],
+                line->data[subline+2][0],line->data[subline+2][1],line->ecc_data[subline+2],
+                line->data[subline+3][0],line->data[subline+3][1],line->ecc_data[subline+3]
+        );
+        subline+=4;
+        command_print(cmd," [+40] %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x)",
+                line->data[subline+0][0],line->data[subline+0][1],line->ecc_data[subline+0],
+                line->data[subline+1][0],line->data[subline+1][1],line->ecc_data[subline+1],
+                line->data[subline+2][0],line->data[subline+2][1],line->ecc_data[subline+2],
+                line->data[subline+3][0],line->data[subline+3][1],line->ecc_data[subline+3]
+        );
+        subline+=4;
+        command_print(cmd," [+60] %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x) %08x_%08x(%02x)",
+                line->data[subline+0][0],line->data[subline+0][1],line->ecc_data[subline+0],
+                line->data[subline+1][0],line->data[subline+1][1],line->ecc_data[subline+1],
+                line->data[subline+2][0],line->data[subline+2][1],line->ecc_data[subline+2],
+                line->data[subline+3][0],line->data[subline+3][1],line->ecc_data[subline+3]
+        );
+    }else{
+        command_print(cmd,"Way %i: state: %s, phys addr: %03x_%08x [tag reg: %08x]:"
+                ,way
+                ,line_state_strings[((uint32_t)line->line_state)>>l2_cache_state_shift]
+                ,(uint32_t)(line->base_addr>>32),(uint32_t)(line->base_addr)
+                ,line->tag_info);
+        command_print(cmd," [+00] %08x_%08x %08x_%08x %08x_%08x %08x_%08x",
+                line->data[subline+0][0],line->data[subline+0][1],
+                line->data[subline+1][0],line->data[subline+1][1],
+                line->data[subline+2][0],line->data[subline+2][1],
+                line->data[subline+3][0],line->data[subline+3][1]
+        );
+        subline+=4;
+        command_print(cmd," [+20] %08x_%08x %08x_%08x %08x_%08x %08x_%08x",
+                line->data[subline+0][0],line->data[subline+0][1],
+                line->data[subline+1][0],line->data[subline+1][1],
+                line->data[subline+2][0],line->data[subline+2][1],
+                line->data[subline+3][0],line->data[subline+3][1]
+        );
+        subline+=4;
+        command_print(cmd," [+40] %08x_%08x %08x_%08x %08x_%08x %08x_%08x",
+                line->data[subline+0][0],line->data[subline+0][1],
+                line->data[subline+1][0],line->data[subline+1][1],
+                line->data[subline+2][0],line->data[subline+2][1],
+                line->data[subline+3][0],line->data[subline+3][1]
+        );
+        subline+=4;
+        command_print(cmd," [+60] %08x_%08x %08x_%08x %08x_%08x %08x_%08x",
+                line->data[subline+0][0],line->data[subline+0][1],
+                line->data[subline+1][0],line->data[subline+1][1],
+                line->data[subline+2][0],line->data[subline+2][1],
+                line->data[subline+3][0],line->data[subline+3][1]
+        );
+    }
+}
+
 static int cache_l2_command_internal(struct l2_context *context, const uint64_t* addrs, int addr_count, int read_invalid, int ecc, struct command_invocation *cmd){
     int ret = ERROR_OK;
     for (uint32_t set=0;set<(1u<<context->tag_n);++set){
-        uint32_t lru_info = 0;
+        uint32_t lru_info = 1;
         if ( addr_count > 0 ){
             int i;
             for ( i=0; i < addr_count ; i++ ){
@@ -4798,7 +4879,6 @@ static int cache_l2_command_internal(struct l2_context *context, const uint64_t*
                 continue;
         }
         for (uint32_t way = 0 ; way<4 ; ++way){
-            static const char line_state_strings[8][3] = {"IV","UD","S ","SL","E ","T ","M ","MU"};
             struct l2_line line;
             ret = l2_read_line(context,set,way,ecc,read_invalid,0,0,&line);
             if (ret != ERROR_OK){
@@ -4824,50 +4904,15 @@ static int cache_l2_command_internal(struct l2_context *context, const uint64_t*
             }
             if (need_print){
                 // из-за битов чётности, LRU не может быть нулём
-                if ( lru_info == 0 ){
+                if ( lru_info == 1 ){
                     ret = l2_read_lru(context, set, &lru_info);
                     if ( ret != ERROR_OK ){
                         LOG_ERROR("Can't read LRU from set %i", set);
                         return ret;
+                    }
+                    cache_l2_print_lru ( cmd, set, lru_info );
                 }
-                command_print(cmd, "set % 4i LRU: %02x LP: %x LB: %x IP: %x IB: %x"
-                ,set
-                ,(lru_info>>26)&0x3f
-                ,(lru_info>>22)&0xf, (lru_info>>18)&0xf
-                ,(lru_info>>10)&0xff, (lru_info>>2)&0xff);
-                }
-                command_print(cmd,"Set %4i way %i: %08x:%02x %s addr: %03x:%08x:"
-                        ,set,way,line.tag_info,line.ecc_tag
-                        ,line_state_strings[((uint32_t)line.line_state)>>l2_cache_state_shift]
-                        ,(uint32_t)(line.base_addr>>32),(uint32_t)(line.base_addr));
-                int subline = 0;
-                command_print(cmd," [+00] %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x",
-                        line.data[subline+0][0],line.data[subline+0][1],line.ecc_data[subline+0],
-                        line.data[subline+1][0],line.data[subline+1][1],line.ecc_data[subline+1],
-                        line.data[subline+2][0],line.data[subline+2][1],line.ecc_data[subline+2],
-                        line.data[subline+3][0],line.data[subline+3][1],line.ecc_data[subline+3]
-                );
-                subline+=4;
-                command_print(cmd," [+20] %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x",
-                        line.data[subline+0][0],line.data[subline+0][1],line.ecc_data[subline+0],
-                        line.data[subline+1][0],line.data[subline+1][1],line.ecc_data[subline+1],
-                        line.data[subline+2][0],line.data[subline+2][1],line.ecc_data[subline+2],
-                        line.data[subline+3][0],line.data[subline+3][1],line.ecc_data[subline+3]
-                );
-                subline+=4;
-                command_print(cmd," [+40] %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x",
-                        line.data[subline+0][0],line.data[subline+0][1],line.ecc_data[subline+0],
-                        line.data[subline+1][0],line.data[subline+1][1],line.ecc_data[subline+1],
-                        line.data[subline+2][0],line.data[subline+2][1],line.ecc_data[subline+2],
-                        line.data[subline+3][0],line.data[subline+3][1],line.ecc_data[subline+3]
-                );
-                subline+=4;
-                command_print(cmd," [+60] %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x %08x:%08x:%02x",
-                        line.data[subline+0][0],line.data[subline+0][1],line.ecc_data[subline+0],
-                        line.data[subline+1][0],line.data[subline+1][1],line.ecc_data[subline+1],
-                        line.data[subline+2][0],line.data[subline+2][1],line.ecc_data[subline+2],
-                        line.data[subline+3][0],line.data[subline+3][1],line.ecc_data[subline+3]
-                );
+                cache_l2_print_line(cmd,&line,way,ecc);
             }
             keep_alive();
         }
@@ -5100,24 +5145,75 @@ COMMAND_HANDLER(ppc475fp_cache_l2_info_command){
     ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
             tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
     if (ret==ERROR_OK){
-        command_print(CMD, "PNCR: %2" PRIu32 , context.pncr&0xff);
-        command_print(CMD, "VerNo: %3" PRIu32 " RevID: %2" PRIu32, (context.rev_id>>8)&0xfff, context.rev_id&0xff);
-        command_print_sameline(CMD, "MasterID: %2" PRIu32 " TSnoop: %" PRIu32 " PlbClkRation: %" PRIu32 " size:",
-                (context.cfg0>>12)&0x1f, (context.cfg0>>8)&0x7, (context.cfg0>>4)&0x3);
+        static const char sizes[4][8] = {"128k","256k","512k","1m"};
+        const char *p = sizes[0];
         switch (context.size)
         {
         case l2_size_128k:
-            command_print(CMD,"128k");
+            p = sizes[0];
             break;
         case l2_size_256k:
-            command_print(CMD,"256k");
+            p = sizes[1];
             break;
         case l2_size_512k:
-            command_print(CMD,"512k");
+            p = sizes[2];
             break;
         case l2_size_1m:
-            command_print(CMD,"1m");
+            p = sizes[3];
             break;
+        }
+        command_print(CMD, "PNCR: %2" PRIu32 , context.pncr&0xff);
+        command_print(CMD, "VerNo: %3" PRIu32 " RevID: %2" PRIu32, (context.rev_id>>8)&0xfff, context.rev_id&0xff);
+        command_print(CMD, "MasterID: %2" PRIu32 " TSnoop: %" PRIu32 " PlbClkRation: %" PRIu32 " Size: %s (%" PRIu32 " sets)",
+                (context.cfg0>>12)&0x1f, (context.cfg0>>8)&0x7, (context.cfg0>>4)&0x3 , p, 1<<context.tag_n);
+        ret |= l2_restore_context(&context);
+    }else{
+        command_print(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_cache_l2_read_command){
+    struct target *target = get_current_target(CMD_CTX);
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    uint32_t set;
+    uint32_t way;
+    int ret = ERROR_OK;
+    if ( CMD_ARGC != 2 ){
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    } else {
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], set);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], way);
+    }
+    if ( way > 3 ){
+        LOG_ERROR("Way too big");
+        return ERROR_COMMAND_ARGUMENT_OVERFLOW;
+    }
+    struct l2_context context;
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
+    if (ret==ERROR_OK){
+        if ( set < (1u<<context.tag_n) ){
+            struct l2_line line;
+            uint32_t lru_info;
+            ret = l2_read_lru(&context, set, &lru_info);
+            if ( ret != ERROR_OK ){
+                LOG_ERROR("Can't read LRU from set %i", set);
+                return ret;
+            }
+            cache_l2_print_lru ( cmd, set, lru_info );
+            ret = l2_read_line(&context,set,way,1,1,0,0,&line);
+            if (ret != ERROR_OK){
+                LOG_ERROR("Can't read tag from set %i way %i", set, way);
+            }else{
+                cache_l2_print_line(cmd,&line,way,1);
+            }
+        }else{
+            LOG_ERROR("Set too big");
+            ret = ERROR_COMMAND_ARGUMENT_OVERFLOW;
         }
         ret |= l2_restore_context(&context);
     }else{
@@ -5416,6 +5512,11 @@ static const struct command_registration ppc475fp_cache_l2_write_exec_command_ha
     COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration ppc475fp_cache_l2_exec_command_handlers[] = {
+    {.name = "read",
+    .mode = COMMAND_EXEC,
+    .usage = "<set> <way>",
+    .handler = ppc476fp_cache_l2_read_command,
+    .help = "Print l2c line"},
     {.name = "write",
     .mode = COMMAND_EXEC,
     .usage = "",
