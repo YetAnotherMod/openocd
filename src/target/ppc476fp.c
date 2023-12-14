@@ -4967,7 +4967,166 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
     ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
             29,28,27,26,25);
     if (ret==ERROR_OK){
-        command_print_sameline(CMD, "Cache size: ");
+        keep_alive();
+        ret = cache_l2_command_internal(&context, addrs, addrs_count, read_invalid, ecc, CMD);
+
+        ret |= l2_restore_context(&context);
+    }else{
+        command_print(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_cache_l2_write_lru_command){
+    struct target *target = get_current_target(CMD_CTX);
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    int ret = ERROR_OK;
+    if ( CMD_ARGC != 2 ){
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    }
+    uint32_t set;
+    uint32_t data;
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], set);
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
+    struct l2_context context;
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
+    if (ret==ERROR_OK){
+        if ( set < (1u<<context.tag_n) ){
+            ret = l2_write_lru ( &context,set,data );
+        }else{
+            LOG_ERROR("Set too big");
+            ret = ERROR_COMMAND_ARGUMENT_OVERFLOW;
+        }
+        ret |= l2_restore_context(&context);
+    }else{
+        command_print(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_cache_l2_write_tag_command){
+    struct target *target = get_current_target(CMD_CTX);
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    uint32_t set;
+    uint32_t way;
+    uint32_t data;
+    uint32_t ecc = 0xffffffff;
+    int ret = ERROR_OK;
+    if ( CMD_ARGC < 3 ){
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    } else {
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], set);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], way);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], data);
+        if ( CMD_ARGC == 4 ){
+            COMMAND_PARSE_NUMBER(u32, CMD_ARGV[3], ecc);
+            if ( ecc > 0x7f ){
+                LOG_ERROR("Ecc too big");
+                return ERROR_COMMAND_ARGUMENT_OVERFLOW;
+            }
+        }else if (CMD_ARGC > 4 ){
+            return ERROR_COMMAND_SYNTAX_ERROR;
+        }
+    }
+    if ( way > 3 ){
+        LOG_ERROR("Way too big");
+        return ERROR_COMMAND_ARGUMENT_OVERFLOW;
+    }
+    struct l2_context context;
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
+    if (ret==ERROR_OK){
+        if ( set < (1u<<context.tag_n) ){
+            ret = l2_write_tag ( &context,set,way,data,ecc );
+        }else{
+            LOG_ERROR("Set too big");
+            ret = ERROR_COMMAND_ARGUMENT_OVERFLOW;
+        }
+        ret |= l2_restore_context(&context);
+    }else{
+        command_print(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc476fp_cache_l2_write_data_command){
+    struct target *target = get_current_target(CMD_CTX);
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    uint32_t set;
+    uint32_t way;
+    uint32_t shift;
+    uint32_t datah;
+    uint32_t datal;
+    uint32_t ecc = 0xffffffff;
+    int ret = ERROR_OK;
+    if ( CMD_ARGC < 5 ){
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    } else {
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], set);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], way);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], shift);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[3], datah);
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[4], datal);
+        if ( CMD_ARGC == 6 ){
+            COMMAND_PARSE_NUMBER(u32, CMD_ARGV[5], ecc);
+            if ( ecc > 0xff ){
+                LOG_ERROR("Ecc too big");
+                return ERROR_COMMAND_ARGUMENT_OVERFLOW;
+            }
+        }else if (CMD_ARGC > 6 ){
+            return ERROR_COMMAND_SYNTAX_ERROR;
+        }
+    }
+    if ( way > 3 ){
+        LOG_ERROR("Way too big");
+        return ERROR_COMMAND_ARGUMENT_OVERFLOW;
+    }
+    if ( shift > 15 ){
+        LOG_ERROR("Shift too big");
+        return ERROR_COMMAND_ARGUMENT_OVERFLOW;
+    }
+    struct l2_context context;
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
+    if (ret==ERROR_OK){
+        if ( set < (1u<<context.tag_n) ){
+            ret = l2_write_data ( &context,set,way,shift,datah,datal,ecc );
+        }else{
+            LOG_ERROR("Set too big");
+            ret = ERROR_COMMAND_ARGUMENT_OVERFLOW;
+        }
+        ret |= l2_restore_context(&context);
+    }else{
+        command_print(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
+}
+
+COMMAND_HANDLER(ppc475fp_cache_l2_info_command){
+    struct target *target = get_current_target(CMD_CTX);
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    struct l2_context context;
+    int ret = ERROR_OK;
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
+    if (ret==ERROR_OK){
+        command_print(CMD, "PNCR: %2" PRIu32 , context.pncr&0xff);
+        command_print(CMD, "VerNo: %3" PRIu32 " RevID: %2" PRIu32, (context.rev_id>>8)&0xfff, context.rev_id&0xff);
+        command_print_sameline(CMD, "MasterID: %2" PRIu32 " TSnoop: %" PRIu32 " PlbClkRation: %" PRIu32 " size:",
+                (context.cfg0>>12)&0x1f, (context.cfg0>>8)&0x7, (context.cfg0>>4)&0x3);
         switch (context.size)
         {
         case l2_size_128k:
@@ -4983,9 +5142,6 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
             command_print(CMD,"1m");
             break;
         }
-        keep_alive();
-        ret = cache_l2_command_internal(&context, addrs, addrs_count, read_invalid, ecc, CMD);
-
         ret |= l2_restore_context(&context);
     }else{
         command_print(CMD, "init context failed");
@@ -5264,6 +5420,37 @@ static const struct command_registration ppc476fp_code_exec_command_handlers[] =
     .help = "Instruction Cache Read"},
     COMMAND_REGISTRATION_DONE};
 
+static const struct command_registration ppc475fp_cache_l2_write_exec_command_handlers[] = {
+    {.name = "lru",
+    .handler = ppc476fp_cache_l2_write_lru_command,
+    .mode = COMMAND_EXEC,
+    .usage = "<set> <data32>",
+    .help = "Write into l2c lru array"},
+    {.name = "tag",
+    .handler = ppc476fp_cache_l2_write_tag_command,
+    .mode = COMMAND_EXEC,
+    .usage = "<set> <way> <data32> [<ecc>]",
+    .help = "Write into l2c tag array"},
+    {.name = "data",
+    .handler = ppc476fp_cache_l2_write_data_command,
+    .mode = COMMAND_EXEC,
+    .usage = "<set> <way> <shift_in_uint64_t> <data32h> <data32l> [<ecc>]",
+    .help = "Write into l2c data array"},
+    COMMAND_REGISTRATION_DONE};
+
+static const struct command_registration ppc475fp_cache_l2_exec_command_handlers[] = {
+    {.name = "write",
+    .mode = COMMAND_EXEC,
+    .usage = "",
+    .chain = ppc475fp_cache_l2_write_exec_command_handlers,
+    .help = "Write into l2c arrays"},
+    {.name = "info",
+    .mode = COMMAND_EXEC,
+    .usage = "",
+    .handler = ppc475fp_cache_l2_info_command,
+    .help = "Print cache info"},
+    COMMAND_REGISTRATION_DONE};
+
 static const struct command_registration ppc476fp_cache_exec_command_handlers[] = {
     {.name = "l1d",
     .handler = ppc476fp_cache_l1d_command,
@@ -5279,6 +5466,7 @@ static const struct command_registration ppc476fp_cache_exec_command_handlers[] 
     .handler = ppc476fp_cache_l2_command,
     .mode = COMMAND_EXEC,
     .usage = "[ecc] [invalid] [addr=addr1 [addr=addr2 [.. addr=addr32]]]",
+    .chain = ppc475fp_cache_l2_exec_command_handlers,
     .help = "Dump l2 entryes"},
     COMMAND_REGISTRATION_DONE};
 

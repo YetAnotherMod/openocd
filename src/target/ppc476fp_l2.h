@@ -165,6 +165,9 @@ struct l2_context{
     uint32_t ra_arraccdo0;
     uint32_t ra_arraccdo1;
     uint32_t ra_arraccdo2;
+    uint32_t pncr;
+    uint32_t rev_id;
+    uint32_t cfg0;
 };
 
 struct l2_line{
@@ -334,22 +337,24 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
         if (ret!=ERROR_OK){
             break;
         }
-        uint32_t rev_id=0;
-        ret = l2_read_u32(context,L2C_L2REVID,&rev_id);
+        ret = l2_read_u32(context,L2C_L2REVID,&context->rev_id);
         if (ret!=ERROR_OK){
             break;
         }
-        if (rev_id == 0){
+        if (context->rev_id == 0){
             LOG_ERROR("incorrect REVID reg. may be error");
             ret = ERROR_FAIL;
             break;
         }
-        uint32_t context_size;
-        ret = l2_read_u32(context,L2C_L2CNFG0,&context_size);
+        ret = l2_read_u32(context,L2C_L2PNCR,&context->pncr);
         if (ret!=ERROR_OK){
             break;
         }
-        context->size = (enum l2_size)(context_size&l2_size_msk);
+        ret = l2_read_u32(context,L2C_L2CNFG0,&context->cfg0);
+        if (ret!=ERROR_OK){
+            break;
+        }
+        context->size = (enum l2_size)(context->cfg0&l2_size_msk);
         switch (context->size)
         {
         case l2_size_128k:
@@ -380,7 +385,7 @@ static inline int l2_init_context(struct target *target, struct l2_context *cont
     return ret;
 }
 
-static inline int l2_arracc_read(struct l2_context *context, uint32_t array_addr, uint32_t arraccctl){
+static inline int l2_arracc_set_arraccadr(struct l2_context *context, uint32_t array_addr){
     int ret = ERROR_OK;
     if(context->prev_l2arraccadr!=array_addr){
         ret = l2_write_u32(context,L2C_L2ARRACCADR,array_addr);
@@ -389,21 +394,47 @@ static inline int l2_arracc_read(struct l2_context *context, uint32_t array_addr
             return ret;
         }
     }
+    return ret;
+}
+
+static inline int l2_arracc_read(struct l2_context *context, uint32_t array_addr, uint32_t arraccctl){
+    int ret = ERROR_OK;
+    ret = l2_arracc_set_arraccadr(context,array_addr);
+    if(ret!=ERROR_OK)
+        return ret;
     ret = l2_write_u32(context,L2C_L2ARRACCCTL,(arraccctl|l2_arraccctl_req|l2_arraccctl_rt_r));
     if(ret!=ERROR_OK)
         return ret;
+    uint32_t data;
     bool valid = false;
     unsigned t = 10;
-    uint32_t data;
     while ((!valid) && ((t--)>0)){
         ret = l2_read_u32(context, L2C_L2ARRACCCTL, &data);
         if (ret!=ERROR_OK)
-            break;
-        valid = (data&l2_arraccctl_rrc)!=0;
+            return ret;
+        valid = (data&(l2_arraccctl_rrc))!=0;
     }
-    if ((ret==ERROR_OK) && (!valid))
-        ret = ERROR_FAIL;
-    return ret;
+    return valid?ERROR_OK:ERROR_FAIL;
+}
+
+static inline int l2_arracc_write(struct l2_context *context, uint32_t array_addr, uint32_t arraccctl, bool ecc_calc){
+    int ret = ERROR_OK;
+    ret = l2_arracc_set_arraccadr(context,array_addr);
+    if(ret!=ERROR_OK)
+        return ret;
+    ret = l2_write_u32(context,L2C_L2ARRACCCTL,(arraccctl|l2_arraccctl_req|(ecc_calc?l2_arraccctl_rt_we:l2_arraccctl_rt_wne)));
+    if(ret!=ERROR_OK)
+        return ret;
+    uint32_t data;
+    bool valid = false;
+    unsigned t = 10;
+    while ((!valid) && ((t--)>0)){
+        ret = l2_read_u32(context, L2C_L2ARRACCCTL, &data);
+        if (ret!=ERROR_OK)
+            return ret;
+        valid = (data&(l2_arraccctl_wrc))!=0;
+    }
+    return valid?ERROR_OK:ERROR_FAIL;
 }
 
 static inline int l2_read_lru(struct l2_context *context, uint32_t set, uint32_t *lru_info){
@@ -416,6 +447,33 @@ static inline int l2_read_lru(struct l2_context *context, uint32_t set, uint32_t
         if(ret!=ERROR_OK)
             return ret;
     }
+    return ret;
+}
+
+static inline int l2_write_lru(struct l2_context *context, uint32_t set, uint32_t lru_info){
+    int ret = ERROR_OK;
+    ret = l2_write_u32(context,L2C_L2ARRACCDI0, lru_info);
+    if(ret!=ERROR_OK)
+        return ret;
+    ret = l2_arracc_write(context,set<<1,l2_arraccctl_bid_lru,false);
+    if(ret!=ERROR_OK)
+        return ret;
+    return ret;
+}
+
+static inline int l2_write_tag(struct l2_context *context, uint32_t set, uint32_t cache_way, uint32_t tag_info, uint32_t tag_ecc){
+    int ret = ERROR_OK;
+    bool ecc_calc = true;
+    ret = l2_write_u32(context,L2C_L2ARRACCDI0, tag_info);
+    if(ret!=ERROR_OK)
+        return ret;
+    if ( tag_ecc != 0xffffffff ) {
+        ecc_calc = false;
+        ret = l2_write_u32(context,L2C_L2ARRACCDI2, tag_ecc << 1);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
+    ret = l2_arracc_write(context,set<<1,l2_arraccctl_bid_tag|(cache_way<<l2_arraccctl_way_ind),ecc_calc);
     return ret;
 }
 
@@ -435,6 +493,27 @@ static inline int l2_read_tag(struct l2_context *context, uint32_t set, uint32_t
         if(ret!=ERROR_OK)
             return ret;
     }
+    return ret;
+}
+
+static inline int l2_write_data(struct l2_context *context, uint32_t set, uint32_t cache_way, uint32_t dw_ind, uint32_t data_h, uint32_t data_l, uint32_t data_ecc){
+    int ret = ERROR_OK;
+    bool ecc_calc = true;
+    if(ret!=ERROR_OK)
+        return ret;
+    ret = l2_write_u32(context,L2C_L2ARRACCDI0, data_h);
+    if(ret!=ERROR_OK)
+        return ret;
+    ret = l2_write_u32(context,L2C_L2ARRACCDI1, data_l);
+    if(ret!=ERROR_OK)
+        return ret;
+    if(data_ecc != 0xffffffff){
+        ecc_calc = false;
+        ret = l2_write_u32(context,L2C_L2ARRACCDI2, data_ecc);
+        if(ret!=ERROR_OK)
+            return ret;
+    }
+    ret = l2_arracc_write(context,(set<<1)|(dw_ind>>3),l2_arraccctl_bid_data|(cache_way<<l2_arraccctl_way_ind)|(0x80>>(dw_ind&0x7)),ecc_calc);
     return ret;
 }
 
