@@ -4404,12 +4404,7 @@ COMMAND_HANDLER(ppc476fp_handle_use_static_mem_on_command) {
 
     uint32_t addr;
     struct target *target = get_current_target(CMD_CTX);
-
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if (ret != ERROR_OK) {
-        LOG_ERROR("\"%s\" not a valid addr", CMD_ARGV[0]);
-        return ERROR_COMMAND_ARGUMENT_INVALID;
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
 
     return use_static_mem_on(target, addr);
 }
@@ -4497,17 +4492,14 @@ COMMAND_HANDLER(ppc476fp_code_dcbf_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
     uint32_t addr;
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if ( ret != ERROR_OK ){
-        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
     struct target *target = get_current_target(CMD_CTX);
     if (target->state != TARGET_HALTED){
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't write addr to tmp reg");
         return ret;
@@ -4526,17 +4518,14 @@ COMMAND_HANDLER(ppc476fp_code_dcbt_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
     uint32_t addr;
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if ( ret != ERROR_OK ){
-        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
     struct target *target = get_current_target(CMD_CTX);
     if (target->state != TARGET_HALTED){
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't write addr to tmp reg");
         return ret;
@@ -4555,16 +4544,13 @@ COMMAND_HANDLER(ppc476fp_code_dcread_command) {
         return ERROR_COMMAND_SYNTAX_ERROR;
     uint32_t addr;
     struct target *target = get_current_target(CMD_CTX);
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if ( ret != ERROR_OK ){
-        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
     if (target->state != TARGET_HALTED){
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't write addr to tmp reg");
         return ret;
@@ -4593,17 +4579,14 @@ COMMAND_HANDLER(ppc476fp_code_icbi_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
     uint32_t addr;
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if ( ret != ERROR_OK ){
-        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
     struct target *target = get_current_target(CMD_CTX);
     if (target->state != TARGET_HALTED){
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't write addr to tmp reg");
         return ret;
@@ -4622,17 +4605,14 @@ COMMAND_HANDLER(ppc476fp_code_icbt_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
     uint32_t addr;
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if ( ret != ERROR_OK ){
-        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
     struct target *target = get_current_target(CMD_CTX);
     if (target->state != TARGET_HALTED){
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't write addr to tmp reg");
         return ret;
@@ -4652,16 +4632,13 @@ COMMAND_HANDLER(ppc476fp_code_icread_command) {
         return ERROR_COMMAND_SYNTAX_ERROR;
     uint32_t addr;
     struct target *target = get_current_target(CMD_CTX);
-    int ret = parse_u32(CMD_ARGV[0], &addr);
-    if ( ret != ERROR_OK ){
-        LOG_ERROR("%s : is not valid addr", CMD_ARGV[0]);
-    }
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
     if (target->state != TARGET_HALTED){
         LOG_ERROR("Target not halted");
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
     if ( ret != ERROR_OK ){
         LOG_ERROR("Can't write addr to tmp reg");
         return ret;
