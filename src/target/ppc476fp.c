@@ -576,6 +576,7 @@ static int write_spr_u32(struct target *target, int spr_num, uint32_t data) {
 static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
 
     static const uint64_t bad = 0x7ff00000babadedaull;
+    *value = bad;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint8_t value_m[8];
     int ret;
@@ -585,7 +586,6 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
 
     if ((!use_fpu_get(target)) ||
         ((get_reg_value_32(ppc476fp->MSR_reg) & MSR_FP_MASK) == 0)) {
-        *value = bad;
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     if (use_static_mem_get(target)) {
@@ -598,7 +598,6 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
         shift = -8;
         endian = use_stack_endianness(target);
     } else {
-        *value = bad;
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
     
@@ -2497,7 +2496,7 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
                                    struct tlb_command_params *params) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     uint32_t saved_MMUCR;
-    int index;
+    int index = 0;
     uint32_t way;
     int index_way;
     int ret;
@@ -2535,7 +2534,6 @@ handle_tlb_create_command_internal(struct command_invocation *cmd,
         index = (params->tid & 0xFF) ^ ((params->epn >> 12) & 0xC0);
         break;
     default:
-        index = 0;
         assert(false);
     }
 
