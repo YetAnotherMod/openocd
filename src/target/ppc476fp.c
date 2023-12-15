@@ -2776,7 +2776,7 @@ static int poll_internal(struct target *target) {
         if (ret != ERROR_OK)
             return ret;
 
-        ret = read_spr_u32(target, SPR_REG_NUM_DBSR, &DBSR_value);
+        ret = read_spr_u32(target, SPR_REG_NUM_DBSR_RC, &DBSR_value);
         if (ret != ERROR_OK)
             return ret;
 
@@ -3789,6 +3789,103 @@ static int use_static_mem_off(struct target *target, enum reg_action action) {
     return ERROR_OK;
 }
 
+static uint32_t decode_spr(const char *name){
+#define REGNAME(x) if (strcmp(name,#x)==0){return SPR_REG_NUM_##x;}
+    REGNAME(CCR0)
+    REGNAME(CCR1)
+    REGNAME(CCR2)
+    REGNAME(CTR)
+    REGNAME(CSRR0)
+    REGNAME(CSRR1)
+    REGNAME(DAC1)
+    REGNAME(DAC2)
+    REGNAME(DCDBTRH)
+    REGNAME(DCDBTRL)
+    REGNAME(DEAR)
+    REGNAME(DVC1)
+    REGNAME(DVC2)
+    REGNAME(DCESR)
+    REGNAME(DCRIPR)
+    REGNAME(DBCR0)
+    REGNAME(DBCR1)
+    REGNAME(DBCR2)
+    REGNAME(DBDR)
+    REGNAME(DBSR_RC)
+    REGNAME(DBSR_WO)
+    REGNAME(DEC)
+    REGNAME(DECAR)
+    REGNAME(ESR)
+    REGNAME(ICESR)
+    REGNAME(IAC1)
+    REGNAME(IAC2)
+    REGNAME(IAC3)
+    REGNAME(IAC4)
+    REGNAME(ICDBDR0)
+    REGNAME(ICDBDR1)
+    REGNAME(ICDBTRH)
+    REGNAME(ICDBTRL)
+    REGNAME(IOCCR)
+    REGNAME(IOCR1)
+    REGNAME(IOCR2)
+    REGNAME(XER)
+    REGNAME(IVOR0 )
+    REGNAME(IVOR1 )
+    REGNAME(IVOR2 )
+    REGNAME(IVOR3 )
+    REGNAME(IVOR4 )
+    REGNAME(IVOR5 )
+    REGNAME(IVOR6 )
+    REGNAME(IVOR7 )
+    REGNAME(IVOR8 )
+    REGNAME(IVOR9 )
+    REGNAME(IVOR10)
+    REGNAME(IVOR11)
+    REGNAME(IVOR12)
+    REGNAME(IVOR13)
+    REGNAME(IVOR14)
+    REGNAME(IVOR15)
+    REGNAME(IVPR)
+    REGNAME(LR)
+    REGNAME(MCSRR0)
+    REGNAME(MCSRR1)
+    REGNAME(MCSR_RW)
+    REGNAME(MCSR_CO)
+    REGNAME(MMUBE0)
+    REGNAME(MMUBE1)
+    REGNAME(MMUCR)
+    REGNAME(PMUCC0)
+    REGNAME(PID)
+    REGNAME(PIR)
+    REGNAME(PVR)
+    REGNAME(PWM)
+    REGNAME(RMPD)
+    REGNAME(RSTCFG)
+    REGNAME(SRR0)
+    REGNAME(SRR1)
+    REGNAME(SPRG0)
+    REGNAME(SPRG1)
+    REGNAME(SPRG2)
+    REGNAME(SPRG3)
+    REGNAME(SPRG4)
+    REGNAME(SPRG5)
+    REGNAME(SPRG6)
+    REGNAME(SPRG7)
+    REGNAME(SPRG8)
+    REGNAME(SSPCR)
+    REGNAME(TBL_R)
+    REGNAME(TBL_W)
+    REGNAME(TBU_R)
+    REGNAME(TBU_W)
+    REGNAME(TCR)
+    REGNAME(TSR_RC)
+    REGNAME(TSR_WO)
+    REGNAME(ISPCR)
+    REGNAME(USPCR)
+    REGNAME(USPGR0)
+    return 0xffffffff;
+#undef REGNAME
+}
+
 COMMAND_HANDLER(ppc476fp_handle_tlb_dump_command) {
     struct target *target = get_current_target(CMD_CTX);
     int ret;
@@ -4159,7 +4256,6 @@ COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    uint32_t addr;
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
@@ -4168,7 +4264,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_read_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
 
     int ret = read_spr_u32(target, addr, &data);
     if (ret != ERROR_OK) {
@@ -4184,7 +4283,6 @@ COMMAND_HANDLER(ppc476fp_handle_spr_get_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    uint32_t addr;
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
@@ -4193,7 +4291,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_get_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
 
     int ret = read_spr_u32(target, addr, &data);
     if (ret != ERROR_OK) {
@@ -4209,7 +4310,6 @@ COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
     if (CMD_ARGC != 2)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    uint32_t addr;
     uint32_t data;
     struct target *target = get_current_target(CMD_CTX);
 
@@ -4218,7 +4318,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_write_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
     COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
     int ret = write_spr_u32(target, addr, data);
@@ -4233,7 +4336,6 @@ COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
     if (CMD_ARGC != 2)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    uint32_t addr;
     uint32_t data;
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
@@ -4243,7 +4345,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_or_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
     COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
     int ret = read_spr_u32(target, addr, &read);
@@ -4263,7 +4368,6 @@ COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
     if (CMD_ARGC != 2)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    uint32_t addr;
     uint32_t data;
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
@@ -4273,7 +4377,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_xor_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
     COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
     int ret = read_spr_u32(target, addr, &read);
@@ -4293,7 +4400,6 @@ COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
     if (CMD_ARGC != 2)
         return ERROR_COMMAND_SYNTAX_ERROR;
 
-    uint32_t addr;
     uint32_t data;
     uint32_t read;
     struct target *target = get_current_target(CMD_CTX);
@@ -4303,7 +4409,10 @@ COMMAND_HANDLER(ppc476fp_handle_spr_and_command) {
         return ERROR_TARGET_NOT_HALTED;
     }
 
-    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
     COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
 
     int ret = read_spr_u32(target, addr, &read);
@@ -4689,7 +4798,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
 
                 if ( i == 0 ) {
 
-                    ret = read_spr_u32(target,925,&dcdbtrh);
+                    ret = read_spr_u32(target,SPR_REG_NUM_DCDBTRH,&dcdbtrh);
                     if ( ret != ERROR_OK ){
                         LOG_ERROR("Can't read dcdbtrh");
                         return ret;
@@ -4742,7 +4851,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
 
                 if ( i == 0 ) {
 
-                    ret = read_spr_u32(target,927,&icdbtrh);
+                    ret = read_spr_u32(target,SPR_REG_NUM_ICDBTRH,&icdbtrh);
                     if ( ret != ERROR_OK ){
                         LOG_ERROR("Can't read icdbtrh");
                         return ret;
@@ -4755,7 +4864,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
 
                 }
                 uint32_t data;
-                ret = read_spr_u32(target,979,&data);
+                ret = read_spr_u32(target,SPR_REG_NUM_ICDBDR0,&data);
                 if ( ret != ERROR_OK ){
                     LOG_ERROR("Can't read icdbdr0");
                     return ret;
@@ -5268,6 +5377,74 @@ COMMAND_HANDLER(ppc476fp_tb_command) {
     return flush_registers(target);
 }
 
+COMMAND_HANDLER(dcr_command) {
+    if ( (CMD_ARGC == 0) || (CMD_ARGC > 2) )
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t addr;
+    uint32_t data;
+    struct target *target = get_current_target(CMD_CTX);
+    int ret;
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+
+    if ( CMD_ARGC == 2 ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
+        ret = write_DCR(target, addr, data );
+        if (ret != ERROR_OK) {
+            return ret;
+        }
+    }else{
+        ret = read_DCR(target, addr, &data);
+        if (ret != ERROR_OK) {
+            return ret;
+        }
+        command_print_sameline(CMD, "0x%08" PRIx32 , data);
+    }
+
+    return flush_registers(target);
+}
+
+COMMAND_HANDLER(spr_command) {
+    if ( (CMD_ARGC == 0) || (CMD_ARGC > 2) )
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    uint32_t data;
+    struct target *target = get_current_target(CMD_CTX);
+    int ret;
+
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    uint32_t addr = decode_spr(CMD_ARGV[0]);
+    if ( addr == 0xffffffff ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    }
+
+    if ( CMD_ARGC == 2 ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
+        ret = write_spr_u32(target, addr, data );
+        if (ret != ERROR_OK) {
+            return ret;
+        }
+    }else{
+        ret = read_spr_u32(target, addr, &data);
+        if (ret != ERROR_OK) {
+            return ret;
+        }
+        command_print_sameline(CMD, "0x%08" PRIx32 , data);
+    }
+
+    return flush_registers(target);
+}
+
 static const struct command_registration ppc476fp_tlb_drop_command_handlers[] =
     {{.name = "all",
       .handler = ppc476fp_handle_tlb_drop_all_command,
@@ -5613,6 +5790,16 @@ const struct command_registration ppc476fp_command_handlers[] = {
      .help = "ppc476fp command group",
      .usage = "",
      .chain = ppc476fp_exec_command_handlers},
+    {.name = "dcr",
+     .mode = COMMAND_EXEC,
+     .handler = dcr_command,
+     .help = "read/write dcr registers",
+     .usage = "<num> [value]"},
+    {.name = "spr",
+     .mode = COMMAND_EXEC,
+     .handler = spr_command,
+     .help = "read/write dcr registers",
+     .usage = "<num> [value]"},
     COMMAND_REGISTRATION_DONE};
 
 struct target_type ppc476fp_target = {
