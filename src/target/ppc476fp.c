@@ -5282,6 +5282,47 @@ COMMAND_HANDLER(ppc475fp_cache_l2_info_command){
     return ret | flush_registers(target);
 }
 
+COMMAND_HANDLER(ppc475fp_cache_l2_reg_command){
+    struct target *target = get_current_target(CMD_CTX);
+    if ( target->state != TARGET_HALTED ){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+    int ret = ERROR_OK;
+    if ( (CMD_ARGC == 0) || (CMD_ARGC > 2) ){
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    }
+    uint32_t reg;
+    uint32_t data;
+    reg = decode_l2_reg(CMD_ARGV[0]);
+    if ( reg == L2C_L2BAD_REG ){
+        COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], reg);
+    }
+    struct l2_context context;
+    ret = l2_init_context(target,&context,tmp_reg_addr,tmp_reg_data,
+            tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr,tmp_reg_addr);
+    if (ret==ERROR_OK){
+        if ( CMD_ARGC == 2){
+            COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], data);
+            ret = l2_write_u32(&context, reg, data);
+            if ( ret != ERROR_OK ){
+                LOG_ERROR("Can't write");
+            }
+        }else{
+            ret = l2_read_u32(&context, reg, &data);
+            if ( ret != ERROR_OK ){
+                LOG_ERROR("Can't read");
+            }else{
+                command_print(CMD, "0x%08" PRIx32, data);
+            }
+        }
+        ret |= l2_restore_context(&context);
+    }else{
+        LOG_ERROR(CMD, "init context failed");
+    }
+    return ret | flush_registers(target);
+}
+
 COMMAND_HANDLER(ppc476fp_cache_l2_read_command){
     struct target *target = get_current_target(CMD_CTX);
     if ( target->state != TARGET_HALTED ){
@@ -5703,6 +5744,11 @@ static const struct command_registration ppc475fp_cache_l2_exec_command_handlers
     .mode = COMMAND_EXEC,
     .usage = "",
     .handler = ppc475fp_cache_l2_info_command,
+    .help = "Print cache info"},
+    {.name = "reg",
+    .mode = COMMAND_EXEC,
+    .usage = "<num> [value]",
+    .handler = ppc475fp_cache_l2_reg_command,
     .help = "Print cache info"},
     COMMAND_REGISTRATION_DONE};
 
