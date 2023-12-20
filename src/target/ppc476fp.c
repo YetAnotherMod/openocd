@@ -5749,7 +5749,7 @@ static const struct command_registration ppc475fp_cache_l2_exec_command_handlers
     .mode = COMMAND_EXEC,
     .usage = "<num> [value]",
     .handler = ppc475fp_cache_l2_reg_command,
-    .help = "Print cache info"},
+    .help = "Access to l2c regs"},
     COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration ppc476fp_cache_exec_command_handlers[] = {
