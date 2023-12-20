@@ -4069,7 +4069,7 @@ COMMAND_HANDLER(ppc476fp_handle_jtag_speed_command) {
     while (timeval_ms() - start_time < 1000) {
         ret = read_DBDR(target, dummy_data);
         if (ret != ERROR_OK) {
-            command_print(CMD, "JTAG communication error");
+            LOG_ERROR(CMD, "JTAG communication error");
             break;
         }
         ++count;
@@ -5103,7 +5103,7 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
 
         ret |= l2_restore_context(&context);
     }else{
-        command_print(CMD, "init context failed");
+        LOG_ERROR(CMD, "init context failed");
     }
     return ret | flush_registers(target);
 }
@@ -5134,7 +5134,7 @@ COMMAND_HANDLER(ppc476fp_cache_l2_write_lru_command){
         }
         ret |= l2_restore_context(&context);
     }else{
-        command_print(CMD, "init context failed");
+        LOG_ERROR(CMD, "init context failed");
     }
     return ret | flush_registers(target);
 }
@@ -5182,7 +5182,7 @@ COMMAND_HANDLER(ppc476fp_cache_l2_write_tag_command){
         }
         ret |= l2_restore_context(&context);
     }else{
-        command_print(CMD, "init context failed");
+        LOG_ERROR(CMD, "init context failed");
     }
     return ret | flush_registers(target);
 }
@@ -5238,7 +5238,7 @@ COMMAND_HANDLER(ppc476fp_cache_l2_write_data_command){
         }
         ret |= l2_restore_context(&context);
     }else{
-        command_print(CMD, "init context failed");
+        LOG_ERROR(CMD, "init context failed");
     }
     return ret | flush_registers(target);
 }
@@ -5277,7 +5277,7 @@ COMMAND_HANDLER(ppc475fp_cache_l2_info_command){
                 (context.cfg0>>12)&0x1f, (context.cfg0>>8)&0x7, (context.cfg0>>4)&0x3 , p, 1<<context.tag_n);
         ret |= l2_restore_context(&context);
     }else{
-        command_print(CMD, "init context failed");
+        LOG_ERROR(CMD, "init context failed");
     }
     return ret | flush_registers(target);
 }
@@ -5326,7 +5326,7 @@ COMMAND_HANDLER(ppc476fp_cache_l2_read_command){
         }
         ret |= l2_restore_context(&context);
     }else{
-        command_print(CMD, "init context failed");
+        LOG_ERROR(CMD, "init context failed");
     }
     return ret | flush_registers(target);
 }
