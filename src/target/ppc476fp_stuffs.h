@@ -15,6 +15,7 @@ enum stuff_codes{
     STUFF_CODE_DCI = 0x7c00038c,
     STUFF_CODE_DCBF = 0x7c0000ac,
     STUFF_CODE_DCBT = 0x7c00022c,
+    STUFF_CODE_DCBZ = 0x7c0007ec,
     STUFF_CODE_DCREAD = 0x7c00028c,
     STUFF_CODE_ICREAD = 0x7c0007cc,
     // gpr
@@ -128,6 +129,10 @@ static inline uint32_t dcbf(uint32_t ra, uint32_t rb){
 
 static inline uint32_t dcbt(uint32_t ra, uint32_t rb){
     return (((uint32_t)STUFF_CODE_DCBT) | (ra<<16) | (rb<<11));
+}
+
+static inline uint32_t dcbz(uint32_t ra, uint32_t rb){
+    return (((uint32_t)STUFF_CODE_DCBZ) | (ra<<16) | (rb<<11));
 }
 
 static inline uint32_t dcread(uint32_t rt, uint32_t ra, uint32_t rb){

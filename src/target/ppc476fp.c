@@ -4648,6 +4648,31 @@ COMMAND_HANDLER(ppc476fp_code_dcbt_command) {
     return flush_registers(target);
 }
 
+COMMAND_HANDLER(ppc476fp_code_dcbz_command) {
+    if (CMD_ARGC != 1)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+    uint32_t addr;
+    COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+    struct target *target = get_current_target(CMD_CTX);
+    if (target->state != TARGET_HALTED){
+        LOG_ERROR("Target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    int ret = write_gpr_u32(target, tmp_reg_addr, addr);
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't write addr to tmp reg");
+        return ret;
+    }
+
+    ret = stuff_code(target, dcbz(0,tmp_reg_addr));
+    if ( ret != ERROR_OK ){
+        LOG_ERROR("Can't run dcbz 0, R%i", tmp_reg_addr);
+        return ret;
+    }
+    return flush_registers(target);
+}
+
 COMMAND_HANDLER(ppc476fp_code_dcread_command) {
     if (CMD_ARGC != 1)
         return ERROR_COMMAND_SYNTAX_ERROR;
@@ -5689,6 +5714,11 @@ static const struct command_registration ppc476fp_code_exec_command_handlers[] =
     .mode = COMMAND_EXEC,
     .usage = "<addr>",
     .help = "Data Cache Block Touch"},
+    {.name = "dcbz",
+    .handler = ppc476fp_code_dcbz_command,
+    .mode = COMMAND_EXEC,
+    .usage = "<addr>",
+    .help = "Data Cache Block Zero"},
     {.name = "dcread",
     .handler = ppc476fp_code_dcread_command,
     .mode = COMMAND_EXEC,
