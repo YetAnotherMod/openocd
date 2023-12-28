@@ -404,8 +404,6 @@ struct ppc476fp_prv_conf {
 struct phys_mem_state {
     uint32_t saved_MSR;
     uint32_t saved_MMUCR;
-    uint32_t saved_PID;
-    uint32_t saved_USPCR;
 };
 
 /**

@@ -2139,13 +2139,6 @@ static int save_phys_mem(struct target *target, struct phys_mem_state *state){
     if (ret != ERROR_OK)
         return ret;
 
-    ret = read_spr_u32(target, SPR_REG_NUM_PID, &state->saved_PID);
-    if (ret != ERROR_OK)
-        return ret;
-
-    ret = read_spr_u32(target, SPR_REG_NUM_USPCR, &state->saved_USPCR);
-    if (ret != ERROR_OK)
-        return ret;
     return ERROR_OK;
 }
 
@@ -2153,24 +2146,17 @@ static int init_phys_mem(struct target *target, struct phys_mem_state *state) {
     int ret;
 
     // set MSR
-    ret = write_MSR_u32(target, state->saved_MSR | MSR_PR_MASK |
-                                MSR_DS_MASK); // problem mode and TS=1
+    ret = write_MSR_u32(target, state->saved_MSR & (~MSR_PR_MASK) ); // problem mode and TS=1
     if (ret != ERROR_OK)
         return ret;
 
-    // load TLB record
-    ret = load_uncached_tlb(target, PHYS_MEM_TLB_INDEX_WAY);
+    // set MMUCR
+    ret = write_spr_u32(target, SPR_REG_NUM_MMUCR, 0x80000000);
     if (ret != ERROR_OK)
         return ret;
 
-    // set PID
-    ret = write_spr_u32(target, SPR_REG_NUM_PID, PHYS_MEM_MAGIC_PID);
-    if (ret != ERROR_OK)
-        return ret;
-
-    // set USPCR
-    ret = write_spr_u32(target, SPR_REG_NUM_USPCR,
-                        0x70000000); // only 1Gb page with PID
+    // syncing
+    ret = stuff_code(target, isync());
     if (ret != ERROR_OK)
         return ret;
 
@@ -2185,16 +2171,6 @@ static int restore_phys_mem(struct target *target,
     // restore TLB record
     ret = write_tlb(target, PHYS_MEM_TLB_INDEX_WAY,
                     &ppc476fp->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].hw);
-    if (ret != ERROR_OK)
-        return ret;
-
-    // retsore USPCR
-    ret = write_spr_u32(target, SPR_REG_NUM_USPCR, state->saved_USPCR);
-    if (ret != ERROR_OK)
-        return ret;
-
-    // retsore PID
-    ret = write_spr_u32(target, SPR_REG_NUM_PID, state->saved_PID);
     if (ret != ERROR_OK)
         return ret;
 
@@ -2216,26 +2192,11 @@ static int restore_phys_mem(struct target *target,
     return ERROR_OK;
 }
 
-static int access_phys_mem(struct target *target, uint32_t new_ERPN_RPN) {
-    struct tlb_hw_record hw = {{
-        TLB_0_V_MASK | TLB_0_TS_MASK |
-            ((PHYS_MEM_BASE_ADDR >> 12)<<TLB_0_EPN_BIT_POS) |
-            (DSIZ_1G<<TLB_0_DSIZ_BIT_POS),
-        
-        ((new_ERPN_RPN >> 20)<<TLB_1_ERPN_BIT_POS) |
-            ((new_ERPN_RPN & 0xFFFFF)<<TLB_1_RPN_BIT_POS),
-        
-        TLB_2_IL1I_MASK | TLB_2_IL1D_MASK |
-            (0x7<<TLB_2_WIMG_BIT_POS) |
-            (0x3<<TLB_2_UXWR_BIT_POS) |
-            (target->endianness == TARGET_LITTLE_ENDIAN?TLB_2_EN_MASK:0)},
-        PHYS_MEM_MAGIC_PID,
-        bltd_no
-    };
+static int access_phys_mem(struct target *target, uint32_t new_erpn) {
 
-    int ret;
+    int ret = ERROR_OK;
 
-    ret = write_tlb(target, PHYS_MEM_TLB_INDEX_WAY, &hw);
+    ret = write_spr_u32(target, SPR_REG_NUM_RMPD, (new_erpn<<20)|0x28180|(target->endianness==TARGET_LITTLE_ENDIAN?0x4000:0));
     if (ret != ERROR_OK)
         return ret;
 
@@ -3477,8 +3438,8 @@ static int ppc476fp_read_phys_memory(struct target *target,
                                      target_addr_t address, uint32_t size,
                                      uint32_t count, uint8_t *buffer) {
     struct phys_mem_state state;
-    uint32_t last_ERPN_RPN = -1; // not setuped yet
-    uint32_t new_ERPN_RPN;
+    uint32_t last_erpn = -1; // not setuped yet
+    uint32_t new_erpn;
     uint32_t i;
     int ret;
     int result = ERROR_OK;
@@ -3489,6 +3450,10 @@ static int ppc476fp_read_phys_memory(struct target *target,
     if (target->state != TARGET_HALTED) {
         LOG_ERROR("target not halted");
         return ERROR_TARGET_NOT_HALTED;
+    }
+
+    if ( address + size * count > 0x3ffffffffffull ){
+        return ERROR_COMMAND_ARGUMENT_OVERFLOW;
     }
 
     if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) ||
@@ -3504,27 +3469,26 @@ static int ppc476fp_read_phys_memory(struct target *target,
 
     ret = init_phys_mem(target, &state);
     if (ret == ERROR_OK){
-        for (i = 0; i < count; ++i) {
-            keep_alive();
-
-            new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
-            if (new_ERPN_RPN != last_ERPN_RPN) {
-                ret = access_phys_mem(target, new_ERPN_RPN);
+        uint32_t pack_count = 0;
+        for (i = 0; i < count; i+= pack_count) {
+            new_erpn = (address >> 32) & 0x3ff;
+            if (new_erpn != last_erpn) {
+                ret = access_phys_mem(target, new_erpn);
                 if (ret != ERROR_OK)
                     break;
-                last_ERPN_RPN = new_ERPN_RPN;
+                last_erpn = new_erpn;
             }
-            uint32_t pack_count = (0x40000000 - (address+i*size)%0x40000000)/size;
+            pack_count = (0x100000000ull - (address+i*size)%0x100000000ull)/size;
             if (pack_count > count) 
                 pack_count = count;
 
             keep_alive();
-            ret = ppc476fp_read_memory(target, (uint32_t)(address&0x3fffffff) + PHYS_MEM_BASE_ADDR, size, pack_count,buffer);
+            ret = ppc476fp_read_memory(target, (uint32_t)address, size, pack_count,buffer);
             if (ret != ERROR_OK)
                 break;
 
-            address += size;
-            buffer += size;
+            address += size*pack_count;
+            buffer += size*pack_count;
         }
         if(ret != ERROR_OK)
             result = ret;
@@ -3553,8 +3517,8 @@ static int ppc476fp_write_phys_memory(struct target *target,
                                       target_addr_t address, uint32_t size,
                                       uint32_t count, const uint8_t *buffer) {
     struct phys_mem_state state;
-    uint32_t last_ERPN_RPN = -1; // not setuped yet
-    uint32_t new_ERPN_RPN;
+    uint32_t last_erpn = -1; // not setuped yet
+    uint32_t new_erpn;
     uint32_t i;
     int ret;
     int result = ERROR_OK;
@@ -3579,21 +3543,21 @@ static int ppc476fp_write_phys_memory(struct target *target,
 
     ret = init_phys_mem(target, &state);
     if (ret == ERROR_OK){
-        for (i = 0; i < count; ++i) {
-            new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
-            if (new_ERPN_RPN != last_ERPN_RPN) {
-                ret = access_phys_mem(target, new_ERPN_RPN);
+        uint32_t pack_count = 0;
+        for (i = 0; i < count; i+= pack_count) {
+            new_erpn = (address >> 32) & 0x3ff;
+            if (new_erpn != last_erpn) {
+                ret = access_phys_mem(target, new_erpn);
                 if (ret != ERROR_OK)
                     break;
-                last_ERPN_RPN = new_ERPN_RPN;
+                last_erpn = new_erpn;
             }
-
-            uint32_t pack_count = (0x40000000 - (address+i*size)%0x40000000)/size;
+            pack_count = (0x100000000ull - (address+i*size)%0x100000000ull)/size;
             if (pack_count > count) 
                 pack_count = count;
 
             keep_alive();
-            ret = ppc476fp_write_memory(target, (uint32_t)(address&0x3fffffff) + PHYS_MEM_BASE_ADDR, size, pack_count,buffer);
+            ret = ppc476fp_write_memory(target, (uint32_t)address, size, pack_count,buffer);
             if (ret != ERROR_OK)
                 break;
             address += size*pack_count;
