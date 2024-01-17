@@ -2165,14 +2165,7 @@ static int init_phys_mem(struct target *target, struct phys_mem_state *state) {
 
 static int restore_phys_mem(struct target *target,
                             struct phys_mem_state *state) {
-    struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
     int ret;
-
-    // restore TLB record
-    ret = write_tlb(target, PHYS_MEM_TLB_INDEX_WAY,
-                    &ppc476fp->tlb_cache[PHYS_MEM_TLB_INDEX_WAY].hw);
-    if (ret != ERROR_OK)
-        return ret;
 
     // restore MMUCR
     ret = write_spr_u32(target, SPR_REG_NUM_MMUCR, state->saved_MMUCR);
