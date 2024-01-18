@@ -2256,6 +2256,7 @@ static int parse_tlb_command_params(unsigned argc, const char *argv[],
     const char *p;
     int ret;
 
+    params->erpn=0;
     params->mask=0;
     params->tid=0;
     params->ts=0;
