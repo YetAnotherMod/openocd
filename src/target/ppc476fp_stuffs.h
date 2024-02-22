@@ -60,7 +60,7 @@ enum stuff_codes{
 };
 
 static inline uint32_t reg_num_10_bits (uint32_t reg_num){
-    return ((reg_num&0x1f)<<5) | ((reg_num>>5)&0x1f);   
+    return ((reg_num&0x1f)<<5) | ((reg_num>>5)&0x1f);
 }
 
 static inline uint32_t lwz (uint32_t rt, uint32_t ra, int16_t d){

@@ -447,7 +447,7 @@ target_to_ppc476fp_tap_ext(struct target *target);
  * @brief Анализ JDSR
  * @param[in] JDSR Значение JDSR
  * @return ERROR_OK - успешно, иначе - ошибка
- * 
+ *
  * Анализирует биты JDSR SER на наличие исключений, выводит текстовое описание
  * ошибки и возвращает ошибку при наличии
 */
@@ -1354,7 +1354,7 @@ static int access_phys_mem(struct target *target, uint32_t new_ERPN_RPN);
 /**
  * @brief Запись всех dirty регистров в память
  * @param[in] target Указатель на объект target
- * 
+ *
  * @warning Должна вызываться в конце каждой интерфейсной функции
 */
 static int flush_registers(struct target* target);

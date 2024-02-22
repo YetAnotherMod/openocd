@@ -600,7 +600,7 @@ static int read_fpr_reg(struct target *target, int reg_num, uint64_t *value) {
     } else {
         return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
     }
-    
+
     ret = stuff_code(target, stfd(reg_num,ra,shift));
     if (ret != ERROR_OK)
         return ret;
@@ -1085,7 +1085,7 @@ static int ppc476fp_set_msr(struct reg *reg, uint8_t *buf){
 
     if (target->state != TARGET_HALTED)
         return ERROR_TARGET_NOT_HALTED;
-    
+
     MSR_new_value = le_to_h_u32(buf);
     if (((MSR_prev_value ^ MSR_new_value) & MSR_FP_MASK) != 0) {
         if ((MSR_prev_value & MSR_FP_MASK) != 0) {
@@ -1497,7 +1497,7 @@ static void invalidate_hw_breakpoints(struct target *target) {
 // поддерживает ядро
 static int check_add_hw_breakpoint(struct target *target,
                                    struct breakpoint *breakpoint) {
-    
+
     int bp_count = 0;
     for (struct breakpoint *bp = target->breakpoints; bp != NULL ; bp=bp->next) {
         if (bp->type != BKPT_HARD)
@@ -1714,7 +1714,7 @@ static int restore_state(struct target *target, int handle_breakpoints) {
     if (ret != ERROR_OK) {
         return ret;
     }
-    
+
     invalidate_regs_status(target);
     invalidate_tlb_cache(target);
 
@@ -2004,7 +2004,7 @@ static int write_tlb(struct target *target, int index_way,
     ret = write_gpr_u32(target, tmp_reg_addr, data0);
     if (ret != ERROR_OK)
         return ret;
-    
+
     target_to_ppc476fp(target)->memory_checked = false;
 
     ret = stuff_code(target,tlbwe(tmp_reg_addr,tmp_reg_data,0));
@@ -2107,7 +2107,7 @@ static void print_tlb_table_header(struct command_invocation *cmd) {
 
 static void print_tlb_table_record(struct command_invocation *cmd,
                                    int index_way, struct tlb_hw_record *hw) {
-    command_print(CMD, 
+    command_print(CMD,
             "%04X  %i %1s%05X  %i  %4s  %03X %05X   %X  %2s  %i    %i   %X   "
             "%X    %X  %02X%i",
             hw->tid, (int)((hw->data[0] & TLB_0_TS_MASK) != 0),
@@ -2718,7 +2718,7 @@ static int poll_internal(struct target *target) {
     JDSR_value = le_to_h_u32(data_r);
 
     target_to_ppc476fp(target)->DWE = (JDSR_value&JDSR_DWE_MASK)!=0;
-    
+
     if (is_halted(JDSR_value))
         state = TARGET_HALTED;
     else
@@ -2898,7 +2898,7 @@ static int ppc476fp_step(struct target *target, int current,
             target->state = TARGET_UNKNOWN;
             return ret;
         }
-        
+
         char st[256];
         arch_state(target,st,sizeof(st));
         LOG_INFO("%s",st);
@@ -3361,7 +3361,7 @@ static int ppc476fp_virt2phys(struct target *target, target_addr_t address,
         ret = write_gpr_u32(target,tmp_reg_addr,(uint32_t)address);
         if(ret!=ERROR_OK)
             break;
-        
+
         if ( ispcr_global ){
             mmucr = (mmucr_saved & 0xfffe0000u) | (msr&MSR_DS_MASK?0x10000:0);
             ret = write_spr_u32(target,SPR_REG_NUM_ISPCR,ispcr_global);
@@ -3488,7 +3488,7 @@ static int ppc476fp_read_phys_memory(struct target *target,
                 last_erpn = new_erpn;
             }
             pack_count = (0x100000000ull - (address+i*size)%0x100000000ull)/size;
-            if (pack_count > count) 
+            if (pack_count > count)
                 pack_count = count;
 
             keep_alive();
@@ -3562,7 +3562,7 @@ static int ppc476fp_write_phys_memory(struct target *target,
                 last_erpn = new_erpn;
             }
             pack_count = (0x100000000ull - (address+i*size)%0x100000000ull)/size;
-            if (pack_count > count) 
+            if (pack_count > count)
                 pack_count = count;
 
             keep_alive();
@@ -4815,7 +4815,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1d_command) {
             if ( ( dcdbtrh & DCDBTRH_VALID_MASK ) != 0 ){
                 command_print(CMD," ");
             }
-            
+
 
         }
     }
@@ -4875,7 +4875,7 @@ COMMAND_HANDLER(ppc476fp_cache_l1i_command) {
             if ( ( icdbtrh & DCDBTRH_VALID_MASK ) != 0 ){
                 command_print(CMD," ");
             }
-            
+
 
         }
     }
@@ -5002,7 +5002,7 @@ static int cache_l2_command_internal(struct l2_context *context, const uint64_t*
                     }
                 }
             }
-            if ( 
+            if (
                     (!read_invalid) &&
                     ((line.line_state==l2_cache_state_invalid)||
                     (line.line_state==l2_cache_state_undefined))
@@ -5086,7 +5086,7 @@ COMMAND_HANDLER(ppc476fp_cache_l2_command) {
                     LOG_ERROR ("%s is not u64", p+1);
                     return ERROR_COMMAND_SYNTAX_ERROR;
                 }
-                 
+
                 break;
         }
     }
