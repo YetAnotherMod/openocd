@@ -276,3 +276,52 @@ const struct rtos_register_stacking rtos_standard_nds32_n1068_stacking = {
 	.calculate_process_stack = rtos_generic_stack_align8,
 	.register_offsets = rtos_standard_nds32_n1068_stack_offsets
 };
+
+static const struct stack_register_offset rtos_standard_ppc476fp_stack_offsets[] = {
+	{ 0x00, 0x24, 32 },		/* R0 */
+	{ 0x01, 0x00, 32 },		/* R1 (SP) */
+	{ 0x02, 0x28, 32 },		/* R2 */
+	{ 0x03, 0x2c, 32 },		/* R3 */
+	{ 0x04, 0x30, 32 },		/* R4 */
+	{ 0x05, 0x34, 32 },		/* R5 */
+	{ 0x06, 0x38, 32 },		/* R6 */
+	{ 0x07, 0x3c, 32 },		/* R7 */
+	{ 0x08, 0x40, 32 },		/* R8 */
+	{ 0x09, 0x44, 32 },		/* R9 */
+	{ 0x0a, 0x48, 32 },		/* R10 */
+	{ 0x0b, 0x4c, 32 },		/* R11 */
+	{ 0x0c, 0x50, 32 },		/* R12 */
+	{ 0x0d, 0x54, 32 },		/* R13 */
+	{ 0x0e, 0x58, 32 },		/* R14 */
+	{ 0x0f, 0x5c, 32 },		/* R15 */
+	{ 0x10, 0x60, 32 },		/* R16 */
+	{ 0x11, 0x64, 32 },		/* R17 */
+	{ 0x12, 0x68, 32 },		/* R18 */
+	{ 0x13, 0x6c, 32 },		/* R19 */
+	{ 0x14, 0x70, 32 },		/* R20 */
+	{ 0x15, 0x74, 32 },		/* R21 */
+	{ 0x16, 0x78, 32 },		/* R22 */
+	{ 0x17, 0x7c, 32 },		/* R23 */
+	{ 0x18, 0x80, 32 },		/* R24 */
+	{ 0x19, 0x84, 32 },		/* R25 */
+	{ 0x1a, 0x88, 32 },		/* R26 */
+	{ 0x1b, 0x8c, 32 },		/* R27 */
+	{ 0x1c, 0x90, 32 },		/* R28 */
+	{ 0x1d, 0x94, 32 },		/* R29 */
+	{ 0x1e, 0x98, 32 },		/* R30 */
+	{ 0x1f, 0x9c, 32 },		/* R31 */
+
+	{ 0x40, 0x0c, 32 },		/* PC */
+	{ 0x41, 0x08, 32 },		/* MSR */
+	{ 0x42, 0x1c, 32 },		/* CR */
+	{ 0x43, 0x10, 32 },		/* LR */
+	{ 0x44, 0x14, 32 },		/* CTR */
+	{ 0x45, 0x18, 32 },		/* XER */
+};
+
+const struct rtos_register_stacking rtos_standart_ppc476fp_stacking = {
+    .stack_registers_size = 0xa0,
+	.stack_growth_direction = -1,
+	.num_output_registers = 38,
+	.register_offsets = rtos_standard_ppc476fp_stack_offsets
+};

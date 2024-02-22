@@ -2967,9 +2967,23 @@ static int ppc476fp_get_gdb_reg_list(struct target *target,
                                      enum target_register_class reg_class) {
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
 
-    *reg_list_size = GDB_REG_COUNT;
-    *reg_list = malloc(sizeof(struct reg *) * GDB_REG_COUNT);
-    memcpy(*reg_list, ppc476fp->all_regs, sizeof(struct reg *) * GDB_REG_COUNT);
+    bool is_fpu_in_gdb = true;
+    int i;
+
+    if ( target->rtos ){
+        is_fpu_in_gdb = false;
+    }
+
+    *reg_list_size = ALL_REG_COUNT;
+    *reg_list = malloc(sizeof(struct reg *) * ALL_REG_COUNT);
+    memcpy(*reg_list, ppc476fp->all_regs, sizeof(struct reg *) * ALL_REG_COUNT);
+
+    if ( is_fpu_in_gdb ) {
+        for ( i = GPR_REG_COUNT ; i < GPR_REG_COUNT+FPR_REG_COUNT ; i++ ){
+            (*reg_list)[i]->hidden = false;
+        }
+        (*reg_list)[ALL_REG_COUNT-1]->hidden = false;
+    }
 
     return ERROR_OK;
 }
@@ -3188,6 +3202,7 @@ static int ppc476fp_target_create(struct target *target, Jim_Interp *interp) {
     struct ppc476fp_common *ppc476fp =
         calloc(1, sizeof(struct ppc476fp_common));
     target->arch_info = ppc476fp;
+    ppc476fp->common_magic = PPC476FP_COMMON_MAGIC;
 
     LOG_DEBUG("coreid=%i", target->coreid);
 

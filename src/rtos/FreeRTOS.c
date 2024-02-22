@@ -85,6 +85,20 @@ static const struct freertos_params freertos_params_list[] = {
 	&rtos_standard_cortex_m4f_stacking,
 	&rtos_standard_cortex_m4f_fpu_stacking,
 	},
+	{
+	"ppc476fp",			/* target_name */
+	4,						/* thread_count_width; */
+	4,						/* pointer_width; */
+	16,						/* list_next_offset; */
+	20,						/* list_width; */
+	8,						/* list_elem_next_offset; */
+	12,						/* list_elem_content_offset */
+	0,						/* thread_stack_offset; */
+	52,						/* thread_name_offset; */
+	&rtos_standart_ppc476fp_stacking,	/* stacking_info */
+	NULL,
+	NULL,
+	},
 };
 
 static bool freertos_detect_rtos(struct target *target);

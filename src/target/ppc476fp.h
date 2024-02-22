@@ -223,7 +223,6 @@ enum DCDBTRH{
 static const uint32_t MMUCR_STID_MASK = (0xFFFF << 0);
 enum reg_counts{
     ALL_REG_COUNT = 71,
-    GDB_REG_COUNT = 71,
     GEN_CACHE_REG_COUNT = 38,
     FPU_CACHE_REG_COUNT = 33,
     GPR_REG_COUNT = 32,
@@ -366,7 +365,10 @@ struct tlb_command_params {
     uint32_t bltd; // 6 for 'no', 7 for 'auto'
 };
 
+#define PPC476FP_COMMON_MAGIC 0xb01dface
+
 struct ppc476fp_common {
+    unsigned int common_magic;
     struct reg *all_regs[ALL_REG_COUNT];
     struct reg *gpr_regs[GPR_REG_COUNT];
     struct reg *fpr_regs[FPR_REG_COUNT];
