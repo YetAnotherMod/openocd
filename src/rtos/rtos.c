@@ -353,6 +353,12 @@ int rtos_thread_packet(struct connection *connection, char const *packet, int pa
 			threadid_t threadid = 0;
 			int found = -1;
 			sscanf(packet, "qThreadExtraInfo,%" SCNx64, &threadid);
+            if ( threadid != -1 ){
+                uint64_t mask = (threadid_t)(-1);
+                mask <<= target_data_bits(target);
+                mask = ~mask;
+                threadid &= mask;
+            }
 
 			if ((target->rtos) && (target->rtos->thread_details)) {
 				int thread_num;
@@ -458,6 +464,12 @@ int rtos_thread_packet(struct connection *connection, char const *packet, int pa
 		threadid_t threadid;
 		int found = -1;
 		sscanf(packet, "T%" SCNx64, &threadid);
+        if ( threadid != -1 ){
+            uint64_t mask = (threadid_t)(-1);
+            mask <<= target_data_bits(target);
+            mask = ~mask;
+            threadid &= mask;
+        }
 		if ((target->rtos) && (target->rtos->thread_details)) {
 			int thread_num;
 			for (thread_num = 0; thread_num < target->rtos->thread_count; thread_num++) {
@@ -477,6 +489,12 @@ int rtos_thread_packet(struct connection *connection, char const *packet, int pa
 		if ((packet[1] == 'g') && (target->rtos)) {
 			threadid_t threadid;
 			sscanf(packet, "Hg%16" SCNx64, &threadid);
+            if ( threadid != -1 ){
+                uint64_t mask = (threadid_t)(-1);
+                mask <<= target_data_bits(target);
+                mask = ~mask;
+                threadid &= mask;
+            }
 			LOG_DEBUG("RTOS: GDB requested to set current thread to 0x%" PRIx64, threadid);
 			/* threadid of 0 indicates target should choose */
 			if (threadid == 0)
