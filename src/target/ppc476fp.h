@@ -312,6 +312,7 @@ enum jtag_instr {
     JTAG_INSTR_WRITE_JDCR_READ_JDSR = 0x28, /* 0b0101000 */
     JTAG_INSTR_WRITE_JISB_READ_JDSR = 0x38, /* 0b0111000 */
     JTAG_INSTR_WRITE_READ_DBDR = 0x58,      /* 0b1011000 */
+    JTAG_INSTR_WRITE_READ_DBDR_CONT = 0x50, /* 0b1010000 */
     JTAG_INSTR_CORE_RELOAD = 0x78, /* 0b1111000, is used for preventing a JTAG
                                       bug with the core swintching */
     JTAG_INSTR_UNKNOW = 0
@@ -367,6 +368,12 @@ struct tlb_command_params {
 
 #define PPC476FP_COMMON_MAGIC 0xb01dface
 
+enum resident_state{
+    resident_state_disabled,
+    resident_state_enabled,
+    resident_state_loaded,
+};
+
 struct ppc476fp_common {
     unsigned int common_magic;
     struct reg *all_regs[ALL_REG_COUNT];
@@ -384,6 +391,7 @@ struct ppc476fp_common {
     uint32_t DAC_value[WP_NUMBER];
     struct tlb_cached_record tlb_cache[TLB_NUMBER];
     bool use_fpu;
+    enum resident_state use_resident;
     enum target_endianness use_stack;
     uint32_t use_static_mem;
     enum target_endianness use_static_mem_endianness;
@@ -501,6 +509,50 @@ static int use_fpu_on(struct target *target);
  * reg_action_ignore - игнорировать и пометить чистыми
  */
 static int use_fpu_off(struct target *target, enum reg_action action);
+
+/**
+ * @brief Считать значение use_resident
+ * @param[in] target Указатель на объект target
+ * @return true - активен
+ * @return false - не активен
+ */
+static bool use_resident_get(struct target *target);
+
+/**
+ * @brief Узнать, был ли резидент загружен в память
+ * @param[in] target Указатель на объект target
+ * @return true - загружен
+ * @return false - не загружен
+ */
+static bool use_resident_loaded(struct target *target); 
+
+/**
+ * @brief Включить use_resident
+ * @param[in] target Указатель на объект target
+ * @return ERROR_OK - успешно, иначе - ошибка
+ */
+static int use_resident_on(struct target *target);
+
+/**
+ * @brief Выключить use_resident
+ * @param[in] target Указатель на объект target
+ * @return ERROR_OK - успешно, иначе - ошибка
+ */
+static int use_resident_off(struct target *target);
+
+/**
+ * @brief Узнать адрес, по которому должен быть загружен резидент
+ * @param[in] target Указатель на объект target
+ * @return адрес в памяти
+ */
+static uint32_t use_resident_addr(struct target *target);
+
+/**
+ * @brief Загрузить резидента в память
+ * @param[in] target Указатель на объект target
+ * @return ERROR_OK - успешно, иначе - ошибка
+ */
+static int use_resident_load(struct target *target);
 
 /// @brief Считать значение параметра use_stack
 /// @param[in] target Указатель на объект target
@@ -733,6 +785,12 @@ static int read_DBDR(struct target *target, uint8_t *data);
 /// @param[in] data Значение для записи
 /// @return ERROR_OK - успешно, иначе - код ошибки
 static int write_DBDR(struct target *target, uint32_t data);
+
+/// @brief Запись значения DBDR и начало исполнения
+/// @param[in] target Указатель на объект target
+/// @param[in] data Значение для записи
+/// @return ERROR_OK - успешно, иначе - код ошибки
+static int write_DBDR_CONT(struct target *target, uint32_t data) {
 
 /// @brief Чтение значения JDSR
 /// @param[in] target Указатель на объект target

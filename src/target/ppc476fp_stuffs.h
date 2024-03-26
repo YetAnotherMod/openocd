@@ -30,6 +30,7 @@ enum stuff_codes{
     // jump
     STUFF_CODE_B = 0x48000000,
     STUFF_CODE_BCLR = 0x4c000020,
+    STUFF_CODE_BCCTR = 0x4c800420,
     // spr/dcr
     STUFF_CODE_MTSPR = 0x7c0003a6,
     STUFF_CODE_MFSPR = 0x7c0002a6,
@@ -203,12 +204,12 @@ static inline uint32_t andis(uint32_t ra, uint32_t rs, uint16_t si){
     return (((uint32_t)STUFF_CODE_ANDIS) | (rs<<21) | (ra<<16) | si );
 }
 
-static inline uint32_t xori(uint32_t ra, uint32_t rs, uint16_t si){
-    return (((uint32_t)STUFF_CODE_XORI) | (rs<<21) | (ra<<16) | si );
+static inline uint32_t xori(uint32_t ra, uint32_t rs, uint16_t ui){
+    return (((uint32_t)STUFF_CODE_XORI) | (rs<<21) | (ra<<16) | ui );
 }
 
-static inline uint32_t xoris(uint32_t ra, uint32_t rs, uint16_t si){
-    return (((uint32_t)STUFF_CODE_XORIS) | (rs<<21) | (ra<<16) | si );
+static inline uint32_t xoris(uint32_t ra, uint32_t rs, uint16_t ui){
+    return (((uint32_t)STUFF_CODE_XORIS) | (rs<<21) | (ra<<16) | ui );
 }
 
 static inline uint32_t stfd(uint32_t frs, uint32_t ra, int16_t d){
@@ -219,8 +220,8 @@ static inline uint32_t lfd(uint32_t frt, uint32_t ra, int16_t d){
     return (((uint32_t)STUFF_CODE_LFD) | (frt<<21) | (ra<<16) | (uint16_t)d);
 }
 
-static inline uint32_t b(uint32_t li, uint32_t aa, uint32_t lk){
-    return (((uint32_t)STUFF_CODE_B) | (li<<2) | (aa<<1) | lk);
+static inline uint32_t b(int32_t li, uint32_t aa, uint32_t lk){
+    return (((uint32_t)STUFF_CODE_B) | (((uint32_t)li)&0x03fffffc) | (aa<<1) | lk);
 }
 
 static inline uint32_t bl(uint32_t li){
@@ -231,8 +232,16 @@ static inline uint32_t bclr(uint32_t bo, uint32_t bi, uint32_t bh, uint32_t lk){
     return (((uint32_t)STUFF_CODE_BCLR) | (bo<<21) | (bi<<16) | (bh<<11) | lk);
 }
 
+static inline uint32_t bcctr(uint32_t bo, uint32_t bi, uint32_t bh, uint32_t lk){
+    return (((uint32_t)STUFF_CODE_BCCTR) | (bo<<21) | (bi<<16) | (bh<<11) | lk);
+}
+
 static inline uint32_t blr(void){
     return bclr(0x14,0,0,0);
+}
+
+static inline uint32_t bctr(void){
+    return bcctr(0x14,0,0,0);
 }
 
 static inline uint32_t mtcrf(uint8_t fxm, uint32_t rs){
@@ -257,6 +266,10 @@ static inline uint32_t mfdcr(uint32_t rt, uint32_t dcrn){
 
 static inline uint32_t tw(uint32_t to, uint32_t ra, uint32_t rb){
     return (((uint32_t)STUFF_CODE_TW) | (to<<21) | (ra<<16) | (rb<<11));
+}
+
+static inline uint32_t tweq(uint32_t ra, uint32_t rb){
+    return tw(4,ra,rb);
 }
 
 static inline uint32_t trap(void){

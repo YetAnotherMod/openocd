@@ -14,6 +14,89 @@ static unsigned long long detected_errors = 0;
 static unsigned long long poll_transactions = 0;
 static unsigned long long poll_detected_errors = 0;
 
+static const uint32_t resident[] = {
+//00000000 <write_words>:
+/*   0:	*/0x7ff3faa6,	//mfspr   r31,1011
+/*   4:	*/0x97fe0004,	//stwu    r31,4(r30)
+/*   8:	*/0x4bfffff8,	//b       0 <write_words>
+
+//0000000c <write_halfs>:
+/*   c:	*/0x7ff3faa6,	//mfspr   r31,1011
+/*  10:	*/0xb7fe0002,	//sthu    r31,2(r30)
+/*  14:	*/0x4bfffff8,	//b       c <write_halfs>
+
+//00000018 <write_bytes>:
+/*  18:	*/0x7ff3faa6,	//mfspr   r31,1011
+/*  1c:	*/0x9ffe0001,	//stbu    r31,1(r30)
+/*  20:	*/0x4bfffff8,	//b       18 <write_bytes>
+
+//00000024 <read_words>:
+/*  24:	*/0x87fe0004, 	//lwzu    r31,4(r30)
+/*  28:	*/0x7ff3fba6, 	//mtspr   1011,r31
+/*  2c:	*/0x4bfffff8, 	//b       24 <read_words>
+
+//00000030 <read_halfs>:
+/*  30:	*/0xa7fe0002, 	//lhzu    r31,2(r30)
+/*  34:	*/0x7ff3fba6, 	//mtspr   1011,r31
+/*  38:	*/0x4bfffff8, 	//b       30 <read_halfs>
+
+//0000003c <read_bytes>:
+/*  3c:	*/0x8ffe0001, 	//lbzu    r31,1(r30)
+/*  40:	*/0x7ff3fba6, 	//mtspr   1011,r31
+/*  44:	*/0x4bfffff8, 	//b       3c <read_bytes>
+
+/*
+за основу взята функция, указанная ниже, скомпилирована с -Os,
+комбинация cmpwl,beqlr заменена на tweq (программная точка останова
+вместо прямого возврата)
+
+в качестве параметров:
+    in - не значащий, добавлен только чтобы освободить r3
+    buffer - указатель на байт ПЕРЕД буфером
+    end - указатель на ПОСЛЕДНИЙ байт буфера
+
+параметры именно такие, потому PPC так проще, а хосту без разницы
+
+unsigned crc32(unsigned in,const unsigned char *buffer, const unsigned char *end)
+{
+	unsigned crc = 0xffffffff;
+    while (buffer!=end) {
+        unsigned c = ((crc >> 24) ^ *++buffer) << 24;
+        for (unsigned j = 8; j > 0; --j)
+            c = c & 0x80000000 ? (c << 1) ^ 0x04c11db7 : (c << 1);
+        crc = (crc << 8) ^ c;
+    }
+    return crc;
+}
+*/
+//00000024 <crc32>:
+/*  48:	*/0x3860ffff, 	//li      r3,-1
+/*  4c:	*/0x7c842808, 	//tweq    r4,r5
+/*  50:	*/0x8d440001, 	//lbzu    r10,1(r4)
+/*  54:	*/0x5469463e, 	//rlwinm  r9,r3,8,24,31
+/*  58:	*/0x7d295278, 	//xor     r9,r9,r10
+/*  5c:	*/0x39400008, 	//li      r10,8
+/*  60:	*/0x5529c00e, 	//rlwinm  r9,r9,24,0,7
+/*  64:	*/0x7d4903a6, 	//mtctr   r10
+/*  68:	*/0x2c090000, 	//cmpwi   r9,0
+/*  6c:	*/0x5529083c, 	//rlwinm  r9,r9,1,0,30
+/*  70:	*/0x4080000c, 	//bge     7c <crc32+0x34>
+/*  74:	*/0x6d2904c1, 	//xoris   r9,r9,1217
+/*  78:	*/0x69291db7, 	//xori    r9,r9,7607
+/*  7c:	*/0x4200ffec, 	//bdnz    68 <crc32+0x20>
+/*  80:	*/0x5463402e, 	//rlwinm  r3,r3,8,0,23
+/*  84:	*/0x7c634a78, 	//xor     r3,r3,r9
+/*  88:	*/0x4bffffc4 	//b       4c <crc32+0x4>
+};
+
+static const uint32_t resident_write_words = 0x00;
+static const uint32_t resident_write_halfs = 0x0c;
+static const uint32_t resident_write_bytes = 0x18;
+static const uint32_t resident_read_words  = 0x24;
+static const uint32_t resident_read_halfs  = 0x30;
+static const uint32_t resident_read_bytes  = 0x3c;
+static const uint32_t resident_crc32       = 0x48;
+
 static bool is_halted(uint32_t jdsr){
     if ((jdsr&JDSR_DWE_MASK)!=0){
         if ((jdsr & (JDSR_UDE_MASK | JDSR_DE_MASK)))
@@ -213,6 +296,11 @@ static int read_DBDR(struct target *target, uint8_t *data) {
 
 static int write_DBDR(struct target *target, uint32_t data) {
     return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR, true,
+                                    data, NULL);
+}
+
+static int write_DBDR_CONT(struct target *target, uint32_t data) {
+    return jtag_read_write_register(target, JTAG_INSTR_WRITE_READ_DBDR_CONT, true,
                                     data, NULL);
 }
 
@@ -1311,6 +1399,7 @@ static void build_reg_caches(struct target *target) {
     ppc476fp->use_stack = TARGET_ENDIAN_UNKNOWN;
     ppc476fp->use_static_mem = 0xffffffff;
     ppc476fp->use_static_mem_endianness = TARGET_ENDIAN_UNKNOWN;
+    ppc476fp->use_resident = resident_state_disabled;
 }
 
 // установка аппаратной точки останова (предполагается, что она создана ранее)
@@ -2974,6 +3063,93 @@ static int ppc476fp_get_gdb_reg_list(struct target *target,
     return ERROR_OK;
 }
 
+static int fast_read(struct target *target, target_addr_t address, enum memory_access_size size, uint32_t count, uint8_t *data){
+    int ret = ERROR_OK;
+
+    struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
+
+    LOG_DEBUG("coreid=%i, address: %#" PRIx64 ", size: %" PRIu32 ", count: %#" PRIx32,
+              target->coreid, address, size, count);
+
+    if (target->state != TARGET_HALTED) {
+        LOG_ERROR("target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = use_resident_load(target);
+    if ( ret != ERROR_OK )
+        return ret;
+
+    const uint32_t base = use_resident_addr(target)+
+        (size == 4 ? resident_read_words : (size == 2 ? resident_read_halfs : resident_read_bytes));
+
+    ret = write_gpr_u32(target,tmp_reg_data,base);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_gpr_u32(target,tmp_reg_addr,address-size);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ppc476fp->PC_reg->dirty = true;
+    ppc476fp->CTR_reg->dirty = true;
+
+    ret = stuff_code(target,mtspr(SPR_REG_NUM_CTR,tmp_reg_data));
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = stuff_code(target,bctr());
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = stuff_code(target,mtspr(SPR_REG_NUM_IAC1,tmp_reg_data));
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = write_spr_u32(target,SPR_REG_NUM_DBCR0,ppc476fp->DBCR0_value|DBCR0_IAC1_MASK);
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = write_JDCR(target, JDCR_FT_MASK|JDCR_UDE_MASK);
+    if (ret != ERROR_OK)
+        return ret;
+    ppc476fp->current_gpr_values_valid[tmp_reg_addr]=false;
+    ppc476fp->current_gpr_values_valid[tmp_reg_data]=false;
+    while ( count-- ){
+        // запись JDCR:RSDBSR не приводит к возобновлению исполнения
+        ret = write_DBDR_CONT(target, count);
+        if(ret!=ERROR_OK)
+            return ret;
+        uint8_t rd[4];
+        ret = read_DBDR(target,rd);
+        if(ret!=ERROR_OK)
+            return ret;
+        switch (size){
+            case memory_access_size_word:
+                target_buffer_set_u32(target,data,le_to_h_u32(rd));
+                break;
+            case memory_access_size_half_word:
+                target_buffer_set_u16(target,data,le_to_h_u16(rd));
+                break;
+            case memory_access_size_byte:
+                *data = *rd;
+                break;
+            default:
+                assert(0);
+        }
+        data+=size;
+        keep_alive();
+    }
+    ret = write_JDCR(target, JDCR_UDE_MASK|(ppc476fp->DWE?JDCR_DWS_MASK:JDCR_STO_MASK));
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_spr_u32(target,SPR_REG_NUM_DBCR0,ppc476fp->DBCR0_value);
+    if(ret!=ERROR_OK)
+        return ret;
+
+    return flush_registers(target);
+}
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
 // communication BUG
 static int ppc476fp_read_memory(struct target *target, target_addr_t address,
@@ -2995,6 +3171,11 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
     if (((size != 4) && (size != 2) && (size != 1)) || (count == 0) ||
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
+
+    if ( count > 16 && use_resident_get(target) ){
+        ret = fast_read(target,address,size,count,buffer);
+        return ret;
+    }
 
     for (i = 0; i < count; ++i) {
         keep_alive();
@@ -3021,6 +3202,77 @@ static int ppc476fp_read_memory(struct target *target, target_addr_t address,
     }
 }
 
+static int fast_write(struct target *target, target_addr_t address, enum memory_access_size size, uint32_t count, const uint8_t *data){
+    int ret = ERROR_OK;
+
+    LOG_DEBUG("coreid=%i, address: %#" PRIx64 ", size: %" PRIu32 ", count: %#" PRIx32,
+        target->coreid, address, size, count);
+    struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
+
+    if (target->state != TARGET_HALTED) {
+        LOG_ERROR("target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    ret = use_resident_load(target);
+    if ( ret != ERROR_OK )
+        return ret;
+
+    const uint32_t base = use_resident_addr(target)+
+        (size == 4 ? resident_write_words : (size == 2 ? resident_write_halfs : resident_write_bytes));
+
+    ret = write_gpr_u32(target,tmp_reg_data,base);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_gpr_u32(target,tmp_reg_addr,address-size);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ppc476fp->PC_reg->dirty = true;
+    ppc476fp->CTR_reg->dirty = true;
+
+    ret = stuff_code(target,mtspr(SPR_REG_NUM_CTR,tmp_reg_data));
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = stuff_code(target,bctr());
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = stuff_code(target,mtspr(SPR_REG_NUM_IAC1,tmp_reg_data));
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = write_spr_u32(target,SPR_REG_NUM_DBCR0,ppc476fp->DBCR0_value|DBCR0_IAC1_MASK);
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = write_JDCR(target, JDCR_FT_MASK|JDCR_UDE_MASK);
+    if (ret != ERROR_OK)
+        return ret;
+    ppc476fp->current_gpr_values_valid[tmp_reg_addr]=false;
+    ppc476fp->current_gpr_values_valid[tmp_reg_data]=false;
+    while ( count-- ){
+        const uint32_t word = 
+        (size == 4 ? target_buffer_get_u32(target,data) : (size == 2 ? target_buffer_get_u16(target,data) : *data));
+        ret = write_DBDR_CONT(target, word);
+        data+=size;
+        if ( ret != ERROR_OK ){
+            return ret;
+        }
+        keep_alive();
+    }
+    ret = write_JDCR(target, JDCR_UDE_MASK|(ppc476fp->DWE?JDCR_DWS_MASK:JDCR_STO_MASK));
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_spr_u32(target,SPR_REG_NUM_DBCR0,ppc476fp->DBCR0_value);
+    if(ret!=ERROR_OK)
+        return ret;
+
+    return flush_registers(target);
+}
 // IMPORTANT: Register autoincrement mode is not used becasue of JTAG
 // communication BUG
 static int ppc476fp_write_memory(struct target *target, target_addr_t address,
@@ -3043,6 +3295,10 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
         !(buffer))
         return ERROR_COMMAND_SYNTAX_ERROR;
 
+    if ( count > 16 && use_resident_get(target) ){
+        ret = fast_write(target,address,size,count,buffer);
+        return ret;
+    }
     for (i = 0; i < count; ++i) {
         keep_alive();
         if ((int)((i+1)*size-shifted)>32768){
@@ -3071,7 +3327,82 @@ static int ppc476fp_write_memory(struct target *target, target_addr_t address,
 static int ppc476fp_checksum_memory(struct target *target,
                                     target_addr_t address, uint32_t count,
                                     uint32_t *checksum) {
-    return ERROR_FAIL;
+
+    if (target->state != TARGET_HALTED) {
+        LOG_ERROR("target not halted");
+        return ERROR_TARGET_NOT_HALTED;
+    }
+
+    int ret = use_resident_load(target);
+    if (ret != ERROR_OK)
+        return ret;
+
+    const uint32_t base = use_resident_addr(target)+resident_crc32;
+
+    ret = write_gpr_u32(target,3,base);
+    if (ret != ERROR_OK)
+        return ret;
+
+    struct ppc476fp_common * ppc476fp = target_to_ppc476fp(target);
+
+    ppc476fp->gpr_regs[9]->dirty = true;
+    ppc476fp->gpr_regs[10]->dirty = true;
+    ppc476fp->PC_reg->dirty = true;
+    ppc476fp->CR_reg->dirty = true;
+    ppc476fp->CTR_reg->dirty = true;
+
+    ppc476fp->current_gpr_values_valid[9]=false;
+    ppc476fp->current_gpr_values_valid[10]=false;
+
+    ret = write_gpr_u32(target,4,address-1);
+    if (ret != ERROR_OK)
+        return ret;
+    ret = write_gpr_u32(target,5,address+count-1);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = stuff_code(target,mtspr(SPR_REG_NUM_CTR,3));
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = stuff_code(target,bctr());
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = write_JDCR(target, JDCR_FT_MASK|JDCR_UDE_MASK);
+    if (ret != ERROR_OK)
+        return ret;
+
+    ret = write_DBDR_CONT(target, 0);
+    if(ret!=ERROR_OK)
+        return ret;
+
+    for ( uint32_t i = count ; i > 0 ; --i ){
+        uint32_t JDSR_value = 0;
+        uint8_t data_r[4];
+        keep_alive();
+        ret = read_JDSR(target, data_r);
+        if (ret != ERROR_OK) {
+            target->state = TARGET_UNKNOWN;
+            return ret;
+        }
+        JDSR_value = le_to_h_u32(data_r);
+
+        if (is_halted(JDSR_value)){
+            break;
+        }
+    }
+
+    ret = write_JDCR(target, JDCR_UDE_MASK|(ppc476fp->DWE?JDCR_DWS_MASK:JDCR_STO_MASK));
+    if(ret!=ERROR_OK)
+        return ret;
+
+    ret = read_gpr_u32(target,3,checksum);
+    if (ret != ERROR_OK)
+        return ret;
+    LOG_DEBUG("crc %08x",*checksum);
+
+    return flush_registers(target);
 }
 
 static int ppc476fp_add_breakpoint(struct target *target,
@@ -3653,6 +3984,58 @@ static int use_fpu_off(struct target *target, enum reg_action action) {
     return ERROR_FAIL;
 }
 
+static bool use_resident_get(struct target *target) {
+    return target_to_ppc476fp(target)->use_resident != resident_state_disabled;
+}
+
+static bool use_resident_loaded(struct target *target) {
+    return target_to_ppc476fp(target)->use_resident == resident_state_loaded;
+}
+
+static int use_resident_on(struct target *target) {
+    if ( use_static_mem_get(target) ){
+        if ( target_to_ppc476fp(target)->use_resident == resident_state_disabled ){
+            target_to_ppc476fp(target)->use_resident = resident_state_enabled;
+        }
+        return ERROR_OK;
+    }
+    LOG_ERROR("use_static_mem need for use_resident");
+    return ERROR_FAIL;
+}
+
+static int use_resident_off(struct target *target) {
+    target_to_ppc476fp(target)->use_resident = resident_state_disabled;
+    return ERROR_OK;
+}
+
+static uint32_t use_resident_addr(struct target *target){
+    return use_static_mem_addr(target)+0x240;
+}
+
+static int use_resident_load(struct target *target){
+    if ( use_resident_loaded(target) ){
+        return ERROR_OK;
+    }
+    if ( use_resident_get(target) ){
+
+        int ret = write_gpr_u32(target,tmp_reg_addr,use_resident_addr(target));
+        if (ret != ERROR_OK)
+            return ret;
+
+        for ( size_t i = 0 ; i < sizeof(resident)/sizeof(resident[0]) ; i++ ){
+            ret = write_gpr_u32(target,tmp_reg_data,resident[i]);
+            if (ret != ERROR_OK)
+                return ret;
+            ret = write_virt_mem_raw(target, tmp_reg_data, tmp_reg_addr, i*4, memory_access_size_word, NULL);
+            if (ret != ERROR_OK)
+                return ret;
+        }
+        return ERROR_OK;
+
+    }
+    return ERROR_FAIL;
+}
+
 static bool use_stack_get(struct target *target) {
     return target_to_ppc476fp(target)->use_stack != TARGET_ENDIAN_UNKNOWN;
 }
@@ -3735,6 +4118,10 @@ static int use_static_mem_on(struct target *target, uint32_t base_addr) {
 static int use_static_mem_off(struct target *target, enum reg_action action) {
     int ret = ERROR_OK;
     struct ppc476fp_common *ppc476fp = target_to_ppc476fp(target);
+    ret = use_resident_off(target);
+    if (ret != ERROR_OK) {
+        return ret;
+    }
     if (!use_fpu_get(target) || use_stack_get(target)) {
         ppc476fp->use_static_mem = 0xffffffff;
         return ERROR_OK;
@@ -4435,6 +4822,35 @@ COMMAND_HANDLER(ppc476fp_handle_use_fpu_off_command) {
     }
 
     return use_fpu_off(target, action);
+}
+
+COMMAND_HANDLER(ppc476fp_handle_use_resident_on_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    struct target *target = get_current_target(CMD_CTX);
+    return use_resident_on(target);
+}
+
+COMMAND_HANDLER(ppc476fp_handle_use_resident_get_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    if (use_resident_get(get_current_target(CMD_CTX))) {
+        command_print(CMD, "resident using enabled %s",(use_resident_loaded(get_current_target(CMD_CTX))?"loaded":"not loaded"));
+    } else {
+        command_print(CMD, "resident using disabled");
+    }
+
+    return ERROR_OK;
+}
+
+COMMAND_HANDLER(ppc476fp_handle_use_resident_off_command) {
+    if (CMD_ARGC != 0)
+        return ERROR_COMMAND_SYNTAX_ERROR;
+
+    struct target *target = get_current_target(CMD_CTX);
+    return use_resident_off(target);
 }
 
 COMMAND_HANDLER(ppc476fp_handle_use_stack_on_command) {
@@ -5592,6 +6008,25 @@ static const struct command_registration
         COMMAND_REGISTRATION_DONE};
 
 static const struct command_registration
+    ppc476fp_use_resident_exec_command_handlers[] = {
+        {.name = "on",
+         .handler = ppc476fp_handle_use_resident_on_command,
+         .mode = COMMAND_EXEC,
+         .usage = "",
+         .help = "enable using resident in openocd"},
+        {.name = "off",
+         .handler = ppc476fp_handle_use_resident_off_command,
+         .mode = COMMAND_EXEC,
+         .usage = "",
+         .help = "disable using resident in openocd"},
+        {.name = "get",
+         .handler = ppc476fp_handle_use_resident_get_command,
+         .mode = COMMAND_EXEC,
+         .usage = "",
+         .help = "using resident in openocd enabled?"},
+        COMMAND_REGISTRATION_DONE};
+
+static const struct command_registration
     ppc476fp_use_stack_exec_command_handlers[] = {
         {.name = "on",
          .handler = ppc476fp_handle_use_stack_on_command,
@@ -5787,6 +6222,11 @@ static const struct command_registration ppc476fp_exec_command_handlers[] = {
      .mode = COMMAND_EXEC,
      .usage = "",
      .help = "read and write spr"},
+    {.name = "use_resident",
+     .chain = ppc476fp_use_resident_exec_command_handlers,
+     .mode = COMMAND_EXEC,
+     .usage = "",
+     .help = "use or not fp regs in openocd"},
     {.name = "use_fpu",
      .chain = ppc476fp_use_fpu_exec_command_handlers,
      .mode = COMMAND_EXEC,
