@@ -790,7 +790,7 @@ static int write_DBDR(struct target *target, uint32_t data);
 /// @param[in] target Указатель на объект target
 /// @param[in] data Значение для записи
 /// @return ERROR_OK - успешно, иначе - код ошибки
-static int write_DBDR_CONT(struct target *target, uint32_t data) {
+static int write_DBDR_CONT(struct target *target, uint32_t data);
 
 /// @brief Чтение значения JDSR
 /// @param[in] target Указатель на объект target
